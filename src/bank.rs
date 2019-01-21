@@ -79,6 +79,12 @@ pub enum BankError {
     MissingSignatureForFee,
 }
 
+/// Defines everything needed to kick-start a bank to a given state
+pub struct BankCheckpoint {
+    pub accounts: Accounts,
+    pub last_ids: RwLock<StatusDeque<Result<()>>>,
+}
+
 pub type Result<T> = result::Result<T, BankError>;
 
 pub const VERIFY_BLOCK_SIZE: usize = 16;
@@ -133,6 +139,14 @@ impl Default for Bank {
 }
 
 impl Bank {
+    /// Create a Bank from a checkpoint
+    pub fn new_from_checkpoint(checkpoint: BankCheckpoint) -> Self {
+        let mut bank = Self::default();
+        bank.accounts = checkpoint.accounts;
+        bank.last_ids = checkpoint.last_ids;
+        bank
+    }
+
     /// Create an Bank with built-in programs.
     pub fn new_with_builtin_programs() -> Self {
         let bank = Self::default();
@@ -152,10 +166,23 @@ impl Bank {
         bank.add_builtin_programs();
         bank
     }
-
     pub fn set_subscriptions(&self, subscriptions: Box<Arc<BankSubscriptions + Send + Sync>>) {
         let mut sub = self.subscriptions.write().unwrap();
         *sub = subscriptions
+    }
+
+    pub fn make_checkpointed_copy(&self) -> Bank {
+        //todo given my implementation of this, I think I don't fully understand what a checkpoint is
+        let last_ids_cp = self.last_ids.write().unwrap().make_checkpointed_copy();
+        let accounts = self.accounts.make_checkpointed_copy();
+
+        let mut copy = Bank::default();
+        copy.accounts = accounts;
+        copy.last_ids = RwLock::new(last_ids_cp);
+        copy.leader_scheduler =
+            Arc::new(RwLock::new(self.leader_scheduler.read().unwrap().clone()));
+        copy.confirmation_time = AtomicUsize::new(self.confirmation_time.load(Ordering::Relaxed));
+        copy
     }
 
     pub fn checkpoint(&self) {
@@ -1826,6 +1853,29 @@ mod tests {
             reserve_signature_with_last_id_test(&bank, &signature, &alice.last_id()),
             Err(StatusDequeError::DuplicateSignature)
         );
+    }
+
+    #[test]
+    fn test_bank_checkpointed_copy() {
+        let alice = Mint::new(10_000);
+        let bank = Bank::new(&alice);
+        let bob = Keypair::new();
+        let charlie = Keypair::new();
+
+        // bob should have 500
+        bank.transfer(500, &alice.keypair(), bob.pubkey(), alice.last_id())
+            .unwrap();
+        assert_eq!(bank.get_balance(&bob.pubkey()), 500);
+        bank.transfer(500, &alice.keypair(), charlie.pubkey(), alice.last_id())
+            .unwrap();
+        assert_eq!(bank.get_balance(&charlie.pubkey()), 500);
+        assert_eq!(bank.checkpoint_depth(), 0);
+
+        let cp_bank = bank.make_checkpointed_copy();
+        assert_eq!(cp_bank.get_balance(&bob.pubkey()), 500);
+        assert_eq!(cp_bank.get_balance(&charlie.pubkey()), 500);
+        assert_eq!(cp_bank.checkpoint_depth(), 0);
+        assert_eq!(bank.checkpoint_depth(), 1);
     }
 
     #[test]

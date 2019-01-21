@@ -165,7 +165,9 @@ fn test_multi_node_ledger_window() -> result::Result<()> {
         Arc::new(signer_proxy),
         None,
         false,
-        LeaderScheduler::from_bootstrap_leader(leader_pubkey),
+        Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
+            leader_pubkey,
+        ))),
         None,
     );
 
@@ -183,7 +185,9 @@ fn test_multi_node_ledger_window() -> result::Result<()> {
         Arc::new(signer_proxy),
         Some(leader_data.gossip),
         false,
-        LeaderScheduler::from_bootstrap_leader(leader_pubkey),
+        Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
+            leader_pubkey,
+        ))),
         None,
     );
 
@@ -265,7 +269,9 @@ fn test_multi_node_validator_catchup_from_zero() -> result::Result<()> {
         Arc::new(signer_proxy),
         None,
         false,
-        LeaderScheduler::from_bootstrap_leader(leader_pubkey),
+        Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
+            leader_pubkey,
+        ))),
         None,
     );
 
@@ -297,7 +303,9 @@ fn test_multi_node_validator_catchup_from_zero() -> result::Result<()> {
             Arc::new(signer_proxy),
             Some(leader_data.gossip),
             false,
-            LeaderScheduler::from_bootstrap_leader(leader_pubkey),
+            Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
+                leader_pubkey,
+            ))),
             None,
         );
         nodes.push(val);
@@ -358,7 +366,9 @@ fn test_multi_node_validator_catchup_from_zero() -> result::Result<()> {
         Arc::new(signer_proxy),
         Some(leader_data.gossip),
         false,
-        LeaderScheduler::from_bootstrap_leader(leader_pubkey),
+        Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
+            leader_pubkey,
+        ))),
         None,
     );
     nodes.push(val);
@@ -446,7 +456,9 @@ fn test_multi_node_basic() {
         Arc::new(signer_proxy),
         None,
         false,
-        LeaderScheduler::from_bootstrap_leader(leader_pubkey),
+        Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
+            leader_pubkey,
+        ))),
         None,
     );
 
@@ -474,7 +486,9 @@ fn test_multi_node_basic() {
             Arc::new(signer_proxy),
             Some(leader_data.gossip),
             false,
-            LeaderScheduler::from_bootstrap_leader(leader_pubkey),
+            Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
+                leader_pubkey,
+            ))),
             None,
         );
         nodes.push(val);
@@ -552,7 +566,9 @@ fn test_boot_validator_from_file() -> result::Result<()> {
         Arc::new(signer_proxy),
         None,
         false,
-        LeaderScheduler::from_bootstrap_leader(leader_pubkey),
+        Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
+            leader_pubkey,
+        ))),
         None,
     );
     let leader_balance =
@@ -575,7 +591,9 @@ fn test_boot_validator_from_file() -> result::Result<()> {
         Arc::new(signer_proxy),
         Some(leader_data.gossip),
         false,
-        LeaderScheduler::from_bootstrap_leader(leader_pubkey),
+        Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
+            leader_pubkey,
+        ))),
         None,
     );
     let mut client = mk_client(&validator_data);
@@ -606,7 +624,9 @@ fn create_leader(
         signer,
         None,
         false,
-        LeaderScheduler::from_bootstrap_leader(leader_data.id),
+        Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
+            leader_data.id,
+        ))),
         None,
     );
     (leader_data, leader_fullnode)
@@ -684,7 +704,9 @@ fn test_leader_restart_validator_start_from_old_ledger() -> result::Result<()> {
         Arc::new(signer_proxy),
         Some(leader_data.gossip),
         false,
-        LeaderScheduler::from_bootstrap_leader(leader_data.id),
+        Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
+            leader_data.id,
+        ))),
         None,
     );
 
@@ -751,7 +773,9 @@ fn test_multi_node_dynamic_network() {
         Arc::new(signer_proxy),
         None,
         true,
-        LeaderScheduler::from_bootstrap_leader(leader_pubkey),
+        Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
+            leader_pubkey,
+        ))),
         None,
     );
 
@@ -822,7 +846,9 @@ fn test_multi_node_dynamic_network() {
                         Arc::new(signer_proxy),
                         Some(leader_data.gossip),
                         true,
-                        LeaderScheduler::from_bootstrap_leader(leader_pubkey),
+                        Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
+                            leader_pubkey,
+                        ))),
                         None,
                     );
                     (rd, val)
@@ -1007,7 +1033,7 @@ fn test_leader_to_validator_transition() {
         Arc::new(signer_proxy),
         Some(leader_info.gossip),
         false,
-        LeaderScheduler::new(&leader_scheduler_config),
+        Arc::new(RwLock::new(LeaderScheduler::new(&leader_scheduler_config))),
         None,
     );
 
@@ -1157,7 +1183,7 @@ fn test_leader_validator_basic() {
         Arc::new(signer_proxy),
         Some(leader_info.gossip),
         false,
-        LeaderScheduler::new(&leader_scheduler_config),
+        Arc::new(RwLock::new(LeaderScheduler::new(&leader_scheduler_config))),
         None,
     );
 
@@ -1170,7 +1196,7 @@ fn test_leader_validator_basic() {
         Arc::new(signer_proxy),
         Some(leader_info.gossip),
         false,
-        LeaderScheduler::new(&leader_scheduler_config),
+        Arc::new(RwLock::new(LeaderScheduler::new(&leader_scheduler_config))),
         None,
     );
 
@@ -1244,19 +1270,16 @@ fn test_leader_validator_basic() {
     }
 }
 
-fn run_node(
-    id: Pubkey,
-    fullnode: Arc<RwLock<Fullnode>>,
-    should_exit: Arc<AtomicBool>,
-) -> JoinHandle<()> {
+fn run_node(id: Pubkey, mut fullnode: Fullnode, should_exit: Arc<AtomicBool>) -> JoinHandle<()> {
     Builder::new()
         .name(format!("run_node-{:?}", id).to_string())
         .spawn(move || loop {
             if should_exit.load(Ordering::Relaxed) {
+                fullnode.exit();
                 return;
             }
-            if fullnode.read().unwrap().check_role_exited() {
-                match fullnode.write().unwrap().handle_role_transition().unwrap() {
+            if fullnode.check_role_exited() {
+                match fullnode.handle_role_transition().unwrap() {
                     Some(FullnodeReturnType::LeaderToValidatorRotation) => (),
                     Some(FullnodeReturnType::ValidatorToLeaderRotation) => (),
                     _ => {
@@ -1359,7 +1382,7 @@ fn test_dropped_handoff_recovery() {
         Arc::new(signer_proxy),
         Some(bootstrap_leader_info.gossip),
         false,
-        LeaderScheduler::new(&leader_scheduler_config),
+        Arc::new(RwLock::new(LeaderScheduler::new(&leader_scheduler_config))),
         None,
     );
 
@@ -1382,7 +1405,7 @@ fn test_dropped_handoff_recovery() {
             Arc::new(signer_proxy),
             Some(bootstrap_leader_info.gossip),
             false,
-            LeaderScheduler::new(&leader_scheduler_config),
+            Arc::new(RwLock::new(LeaderScheduler::new(&leader_scheduler_config))),
             None,
         );
 
@@ -1410,7 +1433,7 @@ fn test_dropped_handoff_recovery() {
         Arc::new(signer_proxy),
         Some(bootstrap_leader_info.gossip),
         false,
-        LeaderScheduler::new(&leader_scheduler_config),
+        Arc::new(RwLock::new(LeaderScheduler::new(&leader_scheduler_config))),
         None,
     );
 
@@ -1535,7 +1558,7 @@ fn test_full_leader_validator_network() {
     // during startup
     let leader_keypair = node_keypairs.pop_front().unwrap();
     let _leader_vote_keypair = vote_account_keypairs.pop_front().unwrap();
-    let mut nodes: Vec<Arc<RwLock<Fullnode>>> = vec![];
+    let mut nodes: Vec<Arc<RwLock<LeaderScheduler>>> = vec![];
     let mut t_nodes = vec![];
 
     info!("Start up the validators");
@@ -1550,35 +1573,38 @@ fn test_full_leader_validator_network() {
         let validator_id = kp.pubkey();
         let validator_node = Node::new_localhost_with_pubkey(validator_id);
         let signer_proxy = VoteSignerProxy::new(&kp, Box::new(LocalVoteSigner::default()));
-        let validator = Arc::new(RwLock::new(Fullnode::new(
+        let leader_scheduler =
+            Arc::new(RwLock::new(LeaderScheduler::new(&leader_scheduler_config)));
+        let validator = Fullnode::new(
             validator_node,
             &validator_ledger_path,
             kp.clone(),
             Arc::new(signer_proxy),
             Some(bootstrap_leader_info.gossip),
             false,
-            LeaderScheduler::new(&leader_scheduler_config),
+            leader_scheduler.clone(),
             None,
-        )));
+        );
 
-        nodes.push(validator.clone());
+        nodes.push(leader_scheduler);
         t_nodes.push(run_node(validator_id, validator, exit.clone()));
     }
 
     info!("Start up the bootstrap leader");
     let signer_proxy = VoteSignerProxy::new(&leader_keypair, Box::new(LocalVoteSigner::default()));
-    let bootstrap_leader = Arc::new(RwLock::new(Fullnode::new(
+    let leader_scheduler = Arc::new(RwLock::new(LeaderScheduler::new(&leader_scheduler_config)));
+    let bootstrap_leader = Fullnode::new(
         bootstrap_leader_node,
         &bootstrap_leader_ledger_path,
         leader_keypair.clone(),
         Arc::new(signer_proxy),
         Some(bootstrap_leader_info.gossip),
         false,
-        LeaderScheduler::new(&leader_scheduler_config),
+        leader_scheduler.clone(),
         None,
-    )));
+    );
 
-    nodes.push(bootstrap_leader.clone());
+    nodes.push(leader_scheduler);
     t_nodes.push(run_node(
         bootstrap_leader_info.id,
         bootstrap_leader,
@@ -1601,9 +1627,8 @@ fn test_full_leader_validator_network() {
     while num_reached_target_height != N + 1 {
         num_reached_target_height = 0;
         for n in nodes.iter() {
-            let node_lock = n.read().unwrap();
-            let ls_lock = node_lock.get_leader_scheduler();
-            if let Some(sh) = ls_lock.read().unwrap().last_seed_height {
+            let ls_lock = n.read().unwrap();
+            if let Some(sh) = ls_lock.last_seed_height {
                 if sh >= target_height {
                     num_reached_target_height += 1;
                 }
@@ -1619,20 +1644,6 @@ fn test_full_leader_validator_network() {
     info!("Wait for threads running the nodes to exit");
     for t in t_nodes {
         t.join().unwrap();
-    }
-
-    info!("Exit all fullnodes");
-    for n in nodes {
-        let result = Arc::try_unwrap(n);
-        match result {
-            Ok(lock) => {
-                let f = lock
-                    .into_inner()
-                    .expect("RwLock for fullnode is still locked");
-                f.close().unwrap();
-            }
-            Err(_) => panic!("Multiple references to RwLock<FullNode> still exist"),
-        }
     }
 
     let mut node_entries = vec![];
@@ -1699,6 +1710,8 @@ fn test_full_leader_validator_network() {
 }
 
 #[test]
+#[ignore]
+//TODO: This test relies on the tpu managing the ledger, which it no longer does. It cannot work without real tvus
 fn test_broadcast_last_tick() {
     solana_logger::setup();
     // The number of validators
@@ -1766,7 +1779,7 @@ fn test_broadcast_last_tick() {
         Arc::new(signer_proxy),
         Some(bootstrap_leader_info.gossip),
         false,
-        LeaderScheduler::new(&leader_scheduler_config),
+        Arc::new(RwLock::new(LeaderScheduler::new(&leader_scheduler_config))),
         None,
     );
 

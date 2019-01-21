@@ -2,16 +2,18 @@
 //! to contruct a software pipeline. The stage uses all available CPU cores and
 //! can do its processing in parallel with signature verification on the GPU.
 
-use crate::bank::Bank;
+use crate::bank::{Bank, BankError};
 use crate::compute_leader_confirmation_service::ComputeLeaderConfirmationService;
 use crate::counter::Counter;
 use crate::entry::Entry;
+use crate::fullnode::TpuRotationSender;
 use crate::packet::Packets;
 use crate::poh_recorder::{PohRecorder, PohRecorderError};
 use crate::poh_service::{Config, PohService};
 use crate::result::{Error, Result};
 use crate::service::Service;
 use crate::sigverify_stage::VerifiedPackets;
+use crate::tpu::TpuReturnType;
 use bincode::deserialize;
 use log::Level;
 use solana_sdk::hash::Hash;
@@ -54,6 +56,7 @@ impl BankingStage {
         last_entry_id: &Hash,
         max_tick_height: Option<u64>,
         leader_id: Pubkey,
+        to_validator_tx: TpuRotationSender,
     ) -> (Self, Receiver<Vec<Entry>>) {
         let (entry_sender, entry_receiver) = channel();
         let shared_verified_receiver = Arc::new(Mutex::new(verified_receiver));
@@ -63,7 +66,7 @@ impl BankingStage {
         // Single thread to generate entries from many banks.
         // This thread talks to poh_service and broadcasts the entries once they have been recorded.
         // Once an entry has been recorded, its last_id is registered with the bank.
-        let poh_service = PohService::new(poh_recorder.clone(), config);
+        let poh_service = PohService::new(poh_recorder.clone(), config, to_validator_tx.clone());
 
         // Single thread to compute confirmation
         let compute_confirmation_service = ComputeLeaderConfirmationService::new(
@@ -80,6 +83,7 @@ impl BankingStage {
                 let thread_verified_receiver = shared_verified_receiver.clone();
                 let thread_poh_recorder = poh_recorder.clone();
                 let thread_banking_exit = poh_service.poh_exit.clone();
+                let thread_to_validator_tx = to_validator_tx.clone();
                 Builder::new()
                     .name("solana-banking-stage-tx".to_string())
                     .spawn(move || {
@@ -102,7 +106,16 @@ impl BankingStage {
                                         break Some(BankingStageReturnType::ChannelDisconnected);
                                     }
                                     Error::PohRecorderError(PohRecorderError::MaxHeightReached) => {
+                                        thread_to_validator_tx
+                                            .send(TpuReturnType::LeaderRotation)
+                                            .unwrap();
+                                        //should get restarted from the channel receiver
                                         break Some(BankingStageReturnType::LeaderRotation);
+                                    }
+                                    Error::BankError(BankError::RecordFailure) => {
+                                        thread_to_validator_tx
+                                            .send(TpuReturnType::LeaderRotation)
+                                            .unwrap();
                                     }
                                     _ => error!("solana-banking-stage-tx {:?}", e),
                                 }
@@ -117,7 +130,6 @@ impl BankingStage {
                     .unwrap()
             })
             .collect();
-
         (
             Self {
                 bank_thread_hdls,
@@ -281,6 +293,7 @@ mod tests {
         let bank = Arc::new(Bank::new(&Mint::new(2)));
         let dummy_leader_id = Keypair::new().pubkey();
         let (verified_sender, verified_receiver) = channel();
+        let (to_validator_tx, _) = channel();
         let (banking_stage, _entry_receiver) = BankingStage::new(
             &bank,
             verified_receiver,
@@ -288,6 +301,7 @@ mod tests {
             &bank.last_id(),
             None,
             dummy_leader_id,
+            to_validator_tx,
         );
         drop(verified_sender);
         assert_eq!(
@@ -301,6 +315,7 @@ mod tests {
         let bank = Arc::new(Bank::new(&Mint::new(2)));
         let dummy_leader_id = Keypair::new().pubkey();
         let (_verified_sender, verified_receiver) = channel();
+        let (to_validator_tx, _) = channel();
         let (banking_stage, entry_receiver) = BankingStage::new(
             &bank,
             verified_receiver,
@@ -308,6 +323,7 @@ mod tests {
             &bank.last_id(),
             None,
             dummy_leader_id,
+            to_validator_tx,
         );
         drop(entry_receiver);
         assert_eq!(
@@ -322,6 +338,7 @@ mod tests {
         let dummy_leader_id = Keypair::new().pubkey();
         let start_hash = bank.last_id();
         let (verified_sender, verified_receiver) = channel();
+        let (to_validator_tx, _) = channel();
         let (banking_stage, entry_receiver) = BankingStage::new(
             &bank,
             verified_receiver,
@@ -329,6 +346,7 @@ mod tests {
             &bank.last_id(),
             None,
             dummy_leader_id,
+            to_validator_tx,
         );
         sleep(Duration::from_millis(500));
         drop(verified_sender);
@@ -350,6 +368,7 @@ mod tests {
         let dummy_leader_id = Keypair::new().pubkey();
         let start_hash = bank.last_id();
         let (verified_sender, verified_receiver) = channel();
+        let (to_validator_tx, _) = channel();
         let (banking_stage, entry_receiver) = BankingStage::new(
             &bank,
             verified_receiver,
@@ -357,6 +376,7 @@ mod tests {
             &bank.last_id(),
             None,
             dummy_leader_id,
+            to_validator_tx,
         );
 
         // good tx
@@ -406,6 +426,7 @@ mod tests {
         let bank = Arc::new(Bank::new(&mint));
         let dummy_leader_id = Keypair::new().pubkey();
         let (verified_sender, verified_receiver) = channel();
+        let (to_validator_tx, _) = channel();
         let (banking_stage, entry_receiver) = BankingStage::new(
             &bank,
             verified_receiver,
@@ -413,6 +434,7 @@ mod tests {
             &bank.last_id(),
             None,
             dummy_leader_id,
+            to_validator_tx,
         );
 
         // Process a batch that includes a transaction that receives two tokens.
@@ -460,6 +482,7 @@ mod tests {
         let bank = Arc::new(Bank::new(&Mint::new(2)));
         let dummy_leader_id = Keypair::new().pubkey();
         let (_verified_sender_, verified_receiver) = channel();
+        let (to_validator_tx, _to_validator_rx) = channel();
         let max_tick_height = 10;
         let (banking_stage, _entry_receiver) = BankingStage::new(
             &bank,
@@ -468,6 +491,7 @@ mod tests {
             &bank.last_id(),
             Some(max_tick_height),
             dummy_leader_id,
+            to_validator_tx,
         );
         assert_eq!(
             banking_stage.join().unwrap(),

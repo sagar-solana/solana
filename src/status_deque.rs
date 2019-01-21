@@ -116,6 +116,15 @@ impl<T: Clone> StatusDeque<T> {
                 .insert(*signature, Status::Complete(result.clone()));
         }
     }
+    pub fn make_checkpointed_copy(&mut self) -> StatusDeque<T> {
+        self.checkpoint();
+        let (tick_height, last_id, entries) = self.checkpoints.front().unwrap().clone();
+        let mut copy = StatusDeque::default();
+        copy.tick_height = tick_height;
+        copy.last_id = last_id;
+        copy.entries = entries;
+        copy
+    }
     pub fn reserve_signature_with_last_id(
         &mut self,
         last_id: &Hash,

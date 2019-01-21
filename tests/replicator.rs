@@ -25,7 +25,7 @@ use solana_vote_signer::rpc::LocalVoteSigner;
 use std::fs::remove_dir_all;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -58,7 +58,9 @@ fn test_replicator_startup() {
             Arc::new(signer_proxy),
             None,
             false,
-            LeaderScheduler::from_bootstrap_leader(leader_info.id.clone()),
+            Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
+                leader_info.id.clone(),
+            ))),
             None,
             STORAGE_ROTATE_TEST_COUNT,
         );
@@ -87,7 +89,9 @@ fn test_replicator_startup() {
             Arc::new(signer_proxy),
             Some(leader_info.gossip),
             false,
-            LeaderScheduler::from_bootstrap_leader(leader_info.id),
+            Arc::new(RwLock::new(LeaderScheduler::from_bootstrap_leader(
+                leader_info.id,
+            ))),
             None,
             STORAGE_ROTATE_TEST_COUNT,
         );

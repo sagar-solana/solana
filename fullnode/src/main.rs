@@ -17,6 +17,7 @@ use std::io::{Error, ErrorKind, Result};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::process::exit;
 use std::sync::Arc;
+use std::sync::RwLock;
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -242,7 +243,7 @@ fn main() {
         Arc::new(vote_signer),
         cluster_entrypoint,
         no_sigverify,
-        leader_scheduler,
+        Arc::new(RwLock::new(leader_scheduler)),
         Some(rpc_port),
     );
 

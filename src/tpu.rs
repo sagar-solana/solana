@@ -3,27 +3,65 @@
 
 use crate::bank::Bank;
 use crate::banking_stage::{BankingStage, BankingStageReturnType};
-use crate::entry::Entry;
+use crate::broadcast_service::BroadcastService;
+use crate::cluster_info::ClusterInfo;
 use crate::fetch_stage::FetchStage;
+use crate::fullnode::TpuRotationSender;
 use crate::poh_service::Config;
 use crate::service::Service;
 use crate::sigverify_stage::SigVerifyStage;
+use crate::tpu_forwarder::TpuForwarder;
 use solana_sdk::hash::Hash;
 use solana_sdk::pubkey::Pubkey;
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Receiver;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::thread;
 
 pub enum TpuReturnType {
     LeaderRotation,
 }
 
-pub struct Tpu {
+pub enum TpuMode {
+    Leader(LeaderServices),
+    Forwarder(ForwarderServices),
+}
+
+pub struct LeaderServices {
     fetch_stage: FetchStage,
     sigverify_stage: SigVerifyStage,
     banking_stage: BankingStage,
+    broadcast_service: BroadcastService,
+}
+
+impl LeaderServices {
+    fn new(
+        fetch_stage: FetchStage,
+        sigverify_stage: SigVerifyStage,
+        banking_stage: BankingStage,
+        broadcast_service: BroadcastService,
+    ) -> Self {
+        LeaderServices {
+            fetch_stage,
+            sigverify_stage,
+            banking_stage,
+            broadcast_service,
+        }
+    }
+}
+
+pub struct ForwarderServices {
+    tpu_forwarder: TpuForwarder,
+}
+
+impl ForwarderServices {
+    fn new(tpu_forwarder: TpuForwarder) -> Self {
+        ForwarderServices { tpu_forwarder }
+    }
+}
+
+pub struct Tpu {
+    tpu_mode: TpuMode,
     exit: Arc<AtomicBool>,
 }
 
@@ -33,14 +71,109 @@ impl Tpu {
         bank: &Arc<Bank>,
         tick_duration: Config,
         transactions_sockets: Vec<UdpSocket>,
+        broadcast_socket: UdpSocket,
+        cluster_info: Arc<RwLock<ClusterInfo>>,
+        entry_height: u64,
         sigverify_disabled: bool,
         max_tick_height: Option<u64>,
         last_entry_id: &Hash,
         leader_id: Pubkey,
-    ) -> (Self, Receiver<Vec<Entry>>, Arc<AtomicBool>) {
+        is_leader: bool,
+        to_validator_tx: TpuRotationSender,
+    ) -> Self {
         let exit = Arc::new(AtomicBool::new(false));
 
-        let (fetch_stage, packet_receiver) = FetchStage::new(transactions_sockets, exit.clone());
+        let tpu_mode = if is_leader {
+            let (fetch_stage, packet_receiver) =
+                FetchStage::new(transactions_sockets, exit.clone());
+
+            let (sigverify_stage, verified_receiver) =
+                SigVerifyStage::new(packet_receiver, sigverify_disabled);
+
+            let (banking_stage, entry_receiver) = BankingStage::new(
+                &bank,
+                verified_receiver,
+                tick_duration,
+                last_entry_id,
+                max_tick_height,
+                leader_id,
+                to_validator_tx,
+            );
+
+            let broadcast_service = BroadcastService::new(
+                bank.clone(),
+                broadcast_socket,
+                cluster_info.clone(),
+                entry_height,
+                bank.leader_scheduler.clone(),
+                entry_receiver,
+                max_tick_height,
+                exit.clone(),
+            );
+
+            let svcs = LeaderServices::new(
+                fetch_stage,
+                sigverify_stage,
+                banking_stage,
+                broadcast_service,
+            );
+            TpuMode::Leader(svcs)
+        } else {
+            let tpu_forwarder = TpuForwarder::new(transactions_sockets, cluster_info.clone());
+            let svcs = ForwarderServices::new(tpu_forwarder);
+            TpuMode::Forwarder(svcs)
+        };
+
+        let tpu = Self {
+            tpu_mode,
+            exit: exit.clone(),
+        };
+
+        tpu
+    }
+
+    pub fn switch_to_forwarder(
+        &mut self,
+        transactions_sockets: Vec<UdpSocket>,
+        cluster_info: Arc<RwLock<ClusterInfo>>,
+    ) {
+        match &self.tpu_mode {
+            TpuMode::Leader(svcs) => {
+                svcs.fetch_stage.close();
+            }
+            TpuMode::Forwarder(svcs) => {
+                svcs.tpu_forwarder.close();
+            }
+        }
+        let tpu_forwarder = TpuForwarder::new(transactions_sockets, cluster_info.clone());
+        self.tpu_mode = TpuMode::Forwarder(ForwarderServices::new(tpu_forwarder));
+    }
+
+    pub fn switch_to_leader(
+        &mut self,
+        bank: &Arc<Bank>,
+        tick_duration: Config,
+        transactions_sockets: Vec<UdpSocket>,
+        broadcast_socket: UdpSocket,
+        cluster_info: Arc<RwLock<ClusterInfo>>,
+        sigverify_disabled: bool,
+        max_tick_height: Option<u64>,
+        entry_height: u64,
+        last_entry_id: &Hash,
+        leader_id: Pubkey,
+        to_validator_tx: TpuRotationSender,
+    ) {
+        match &self.tpu_mode {
+            TpuMode::Leader(svcs) => {
+                svcs.fetch_stage.close();
+            }
+            TpuMode::Forwarder(svcs) => {
+                svcs.tpu_forwarder.close();
+            }
+        }
+        self.exit = Arc::new(AtomicBool::new(false));
+        let (fetch_stage, packet_receiver) =
+            FetchStage::new(transactions_sockets, self.exit.clone());
 
         let (sigverify_stage, verified_receiver) =
             SigVerifyStage::new(packet_receiver, sigverify_disabled);
@@ -52,16 +185,34 @@ impl Tpu {
             last_entry_id,
             max_tick_height,
             leader_id,
+            to_validator_tx,
         );
 
-        let tpu = Self {
+        let broadcast_service = BroadcastService::new(
+            bank.clone(),
+            broadcast_socket,
+            cluster_info.clone(),
+            entry_height,
+            bank.leader_scheduler.clone(),
+            entry_receiver,
+            max_tick_height,
+            self.exit.clone(),
+        );
+
+        let svcs = LeaderServices::new(
             fetch_stage,
             sigverify_stage,
             banking_stage,
-            exit: exit.clone(),
-        };
+            broadcast_service,
+        );
+        self.tpu_mode = TpuMode::Leader(svcs);
+    }
 
-        (tpu, entry_receiver, exit)
+    pub fn is_leader(&self) -> bool {
+        match self.tpu_mode {
+            TpuMode::Forwarder(_) => false,
+            TpuMode::Leader(_) => true,
+        }
     }
 
     pub fn exit(&self) {
@@ -73,7 +224,14 @@ impl Tpu {
     }
 
     pub fn close(self) -> thread::Result<Option<TpuReturnType>> {
-        self.fetch_stage.close();
+        match &self.tpu_mode {
+            TpuMode::Leader(svcs) => {
+                svcs.fetch_stage.close();
+            }
+            TpuMode::Forwarder(svcs) => {
+                svcs.tpu_forwarder.close();
+            }
+        }
         self.join()
     }
 }
@@ -82,11 +240,23 @@ impl Service for Tpu {
     type JoinReturnType = Option<TpuReturnType>;
 
     fn join(self) -> thread::Result<(Option<TpuReturnType>)> {
-        self.fetch_stage.join()?;
-        self.sigverify_stage.join()?;
-        match self.banking_stage.join()? {
-            Some(BankingStageReturnType::LeaderRotation) => Ok(Some(TpuReturnType::LeaderRotation)),
-            _ => Ok(None),
+        match self.tpu_mode {
+            TpuMode::Leader(svcs) => {
+                //todo who joins broadcast service?
+                svcs.broadcast_service.join()?;
+                svcs.fetch_stage.join()?;
+                svcs.sigverify_stage.join()?;
+                match svcs.banking_stage.join()? {
+                    Some(BankingStageReturnType::LeaderRotation) => {
+                        Ok(Some(TpuReturnType::LeaderRotation))
+                    }
+                    _ => Ok(None),
+                }
+            }
+            TpuMode::Forwarder(svcs) => {
+                svcs.tpu_forwarder.join()?;
+                Ok(None)
+            }
         }
     }
 }
