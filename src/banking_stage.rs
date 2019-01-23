@@ -21,7 +21,7 @@ use solana_sdk::pubkey::Pubkey;
 use solana_sdk::timing;
 use solana_sdk::transaction::Transaction;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, Builder, JoinHandle};
@@ -75,6 +75,8 @@ impl BankingStage {
             poh_service.poh_exit.clone(),
         );
 
+        let did_notify = Arc::new(AtomicBool::new(false));
+
         // Many banks that process transactions in parallel.
         let bank_thread_hdls: Vec<JoinHandle<Option<BankingStageReturnType>>> = (0
             ..Self::num_threads())
@@ -84,6 +86,7 @@ impl BankingStage {
                 let thread_poh_recorder = poh_recorder.clone();
                 let thread_banking_exit = poh_service.poh_exit.clone();
                 let thread_to_validator_tx = to_validator_tx.clone();
+                let thread_did_notify_rotation = did_notify.clone();
                 Builder::new()
                     .name("solana-banking-stage-tx".to_string())
                     .spawn(move || {
@@ -105,17 +108,17 @@ impl BankingStage {
                                     Error::SendError => {
                                         break Some(BankingStageReturnType::ChannelDisconnected);
                                     }
-                                    Error::PohRecorderError(PohRecorderError::MaxHeightReached) => {
-                                        thread_to_validator_tx
-                                            .send(TpuReturnType::LeaderRotation)
-                                            .unwrap();
+                                    Error::PohRecorderError(PohRecorderError::MaxHeightReached)
+                                    | Error::BankError(BankError::RecordFailure) => {
+                                        if !thread_did_notify_rotation.load(Ordering::Relaxed) {
+                                            let _ = thread_to_validator_tx
+                                                .send(TpuReturnType::LeaderRotation);
+                                            thread_did_notify_rotation
+                                                .store(true, Ordering::Relaxed);
+                                        }
+
                                         //should get restarted from the channel receiver
                                         break Some(BankingStageReturnType::LeaderRotation);
-                                    }
-                                    Error::BankError(BankError::RecordFailure) => {
-                                        thread_to_validator_tx
-                                            .send(TpuReturnType::LeaderRotation)
-                                            .unwrap();
                                     }
                                     _ => error!("solana-banking-stage-tx {:?}", e),
                                 }
