@@ -1247,9 +1247,11 @@ fn test_leader_validator_basic() {
 
     // Shut down
     // stop the leader first so no more ticks/txs are created
-    leader.close().expect("Expected successful leader close");
+    leader.exit();
+    validator.exit();
+    leader.join().expect("Expected successful leader close");
     validator
-        .close()
+        .join()
         .expect("Expected successful validator close");
 
     // Check the ledger of the validator to make sure the entry height is correct
