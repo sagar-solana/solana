@@ -16,6 +16,8 @@ use solana::poh_service::NUM_TICKS_PER_SECOND;
 use solana::result;
 use solana::service::Service;
 use solana::thin_client::{retry_get_balance, ThinClient};
+use solana::tpu::TpuReturnType;
+use solana::tvu::TvuReturnType;
 use solana::vote_signer_proxy::VoteSignerProxy;
 use solana_sdk::hash::Hash;
 use solana_sdk::pubkey::Pubkey;
@@ -1244,10 +1246,11 @@ fn test_leader_validator_basic() {
     }
 
     // Shut down
+    // stop the leader first so no more ticks/txs are created
+    leader.close().expect("Expected successful leader close");
     validator
         .close()
         .expect("Expected successful validator close");
-    leader.close().expect("Expected successful leader close");
 
     // Check the ledger of the validator to make sure the entry height is correct
     // and that the old leader and the new leader's ledgers agree up to the point
@@ -1275,19 +1278,26 @@ fn run_node(id: Pubkey, mut fullnode: Fullnode, should_exit: Arc<AtomicBool>) ->
         .name(format!("run_node-{:?}", id).to_string())
         .spawn(move || loop {
             if should_exit.load(Ordering::Relaxed) {
-                fullnode.exit();
+                fullnode.close().expect("failed to close");
                 return;
             }
-            if fullnode.check_role_exited() {
-                match fullnode.handle_role_transition().unwrap() {
-                    Some(FullnodeReturnType::LeaderToValidatorRotation) => (),
-                    Some(FullnodeReturnType::ValidatorToLeaderRotation) => (),
-                    _ => {
-                        panic!("Expected reason for exit to be leader rotation");
+            let should_be_fwdr = fullnode.role_notifiers.1.try_recv();
+            let should_be_leader = fullnode.role_notifiers.0.try_recv();
+            match should_be_leader {
+                Ok(TvuReturnType::LeaderRotation(tick_height, entry_height, last_entry_id)) => {
+                    fullnode.validator_to_leader(tick_height, entry_height, last_entry_id);
+                }
+                Err(_) => match should_be_fwdr {
+                    Ok(TpuReturnType::LeaderRotation) => {
+                        fullnode
+                            .leader_to_validator()
+                            .expect("failed when transitioning to validator");
                     }
-                };
+                    Err(_) => {
+                        sleep(Duration::new(1, 0));
+                    }
+                },
             }
-            sleep(Duration::new(1, 0));
         })
         .unwrap()
 }
@@ -1558,7 +1568,7 @@ fn test_full_leader_validator_network() {
     // during startup
     let leader_keypair = node_keypairs.pop_front().unwrap();
     let _leader_vote_keypair = vote_account_keypairs.pop_front().unwrap();
-    let mut nodes: Vec<Arc<RwLock<LeaderScheduler>>> = vec![];
+    let mut schedules: Vec<Arc<RwLock<LeaderScheduler>>> = vec![];
     let mut t_nodes = vec![];
 
     info!("Start up the validators");
@@ -1586,7 +1596,7 @@ fn test_full_leader_validator_network() {
             None,
         );
 
-        nodes.push(leader_scheduler);
+        schedules.push(leader_scheduler);
         t_nodes.push(run_node(validator_id, validator, exit.clone()));
     }
 
@@ -1604,7 +1614,7 @@ fn test_full_leader_validator_network() {
         None,
     );
 
-    nodes.push(leader_scheduler);
+    schedules.push(leader_scheduler);
     t_nodes.push(run_node(
         bootstrap_leader_info.id,
         bootstrap_leader,
@@ -1626,9 +1636,9 @@ fn test_full_leader_validator_network() {
 
     while num_reached_target_height != N + 1 {
         num_reached_target_height = 0;
-        for n in nodes.iter() {
-            let ls_lock = n.read().unwrap();
-            if let Some(sh) = ls_lock.last_seed_height {
+        for n in schedules.iter() {
+            let ls_lock = n.read().unwrap().last_seed_height;
+            if let Some(sh) = ls_lock {
                 if sh >= target_height {
                     num_reached_target_height += 1;
                 }

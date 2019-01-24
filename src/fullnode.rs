@@ -327,7 +327,7 @@ impl Fullnode {
         }
     }
 
-    fn leader_to_validator(&mut self) -> Result<()> {
+    pub fn leader_to_validator(&mut self) -> Result<()> {
         trace!("leader_to_validator");
         let (scheduled_leader, _) = self.bank.get_current_leader().unwrap();
         self.cluster_info
@@ -354,7 +354,7 @@ impl Fullnode {
         }
     }
 
-    fn validator_to_leader(&mut self, tick_height: u64, entry_height: u64, last_id: Hash) {
+    pub fn validator_to_leader(&mut self, tick_height: u64, entry_height: u64, last_id: Hash) {
         trace!("validator_to_leader");
         self.cluster_info
             .write()
@@ -388,12 +388,11 @@ impl Fullnode {
         )
     }
 
-    pub fn check_role_exited(&self) -> bool {
-        self.node_services.is_exited()
-    }
-
     pub fn handle_role_transition(&mut self) -> Result<Option<FullnodeReturnType>> {
         loop {
+            if self.exit.load(Ordering::Relaxed) {
+                return Ok(None);
+            }
             let should_be_fwdr = self.role_notifiers.1.try_recv();
             let should_be_leader = self.role_notifiers.0.try_recv();
             match should_be_leader {
@@ -406,7 +405,9 @@ impl Fullnode {
                         self.leader_to_validator()?;
                         return Ok(Some(FullnodeReturnType::LeaderToValidatorRotation));
                     }
-                    _ => continue,
+                    _ => {
+                        continue;
+                    }
                 },
             }
         }
