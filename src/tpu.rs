@@ -67,6 +67,7 @@ pub struct Tpu {
 
 impl Tpu {
     #[allow(clippy::new_ret_no_self)]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         bank: &Arc<Bank>,
         tick_duration: Config,
@@ -97,13 +98,13 @@ impl Tpu {
                 last_entry_id,
                 max_tick_height,
                 leader_id,
-                to_validator_tx,
+                &to_validator_tx,
             );
 
             let broadcast_service = BroadcastService::new(
                 bank.clone(),
                 broadcast_socket,
-                cluster_info.clone(),
+                cluster_info,
                 entry_height,
                 bank.leader_scheduler.clone(),
                 entry_receiver,
@@ -119,17 +120,15 @@ impl Tpu {
             );
             TpuMode::Leader(svcs)
         } else {
-            let tpu_forwarder = TpuForwarder::new(transactions_sockets, cluster_info.clone());
+            let tpu_forwarder = TpuForwarder::new(transactions_sockets, cluster_info);
             let svcs = ForwarderServices::new(tpu_forwarder);
             TpuMode::Forwarder(svcs)
         };
 
-        let tpu = Self {
+        Self {
             tpu_mode,
             exit: exit.clone(),
-        };
-
-        tpu
+        }
     }
 
     pub fn switch_to_forwarder(
@@ -145,10 +144,11 @@ impl Tpu {
                 svcs.tpu_forwarder.close();
             }
         }
-        let tpu_forwarder = TpuForwarder::new(transactions_sockets, cluster_info.clone());
+        let tpu_forwarder = TpuForwarder::new(transactions_sockets, cluster_info);
         self.tpu_mode = TpuMode::Forwarder(ForwarderServices::new(tpu_forwarder));
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn switch_to_leader(
         &mut self,
         bank: &Arc<Bank>,
@@ -185,13 +185,13 @@ impl Tpu {
             last_entry_id,
             max_tick_height,
             leader_id,
-            to_validator_tx,
+            &to_validator_tx,
         );
 
         let broadcast_service = BroadcastService::new(
             bank.clone(),
             broadcast_socket,
-            cluster_info.clone(),
+            cluster_info,
             entry_height,
             bank.leader_scheduler.clone(),
             entry_receiver,

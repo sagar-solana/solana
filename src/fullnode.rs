@@ -275,7 +275,7 @@ impl Fullnode {
         let (to_validator_tx, to_validator_rx) = channel();
 
         let tvu = Tvu::new(
-            &vote_signer.clone(),
+            &vote_signer,
             &bank,
             entry_height,
             *last_entry_id,
@@ -344,24 +344,20 @@ impl Fullnode {
         // in the active set, then the leader scheduler will pick the same leader again, so
         // check for that
         if scheduled_leader == self.keypair.pubkey() {
-            match &mut self.node_role {
-                Some(NodeRole::AwesomeSuperNode(ref mut svcs)) => {
-                    let (last_entry_id, entry_height) = svcs.tvu.get_state();
-                    self.validator_to_leader(self.bank.tick_height(), entry_height, last_entry_id);
-                }
-                _ => (),
+            if let Some(NodeRole::AwesomeSuperNode(ref mut svcs)) = &mut self.node_role {
+                let (last_entry_id, entry_height) = svcs.tvu.get_state();
+                self.validator_to_leader(self.bank.tick_height(), entry_height, last_entry_id);
             }
             Ok(())
         } else {
-            match &mut self.node_role {
-                Some(NodeRole::AwesomeSuperNode(ref mut svcs)) => svcs.tpu.switch_to_forwarder(
+            if let Some(NodeRole::AwesomeSuperNode(ref mut svcs)) = &mut self.node_role {
+                svcs.tpu.switch_to_forwarder(
                     self.tpu_sockets
                         .iter()
                         .map(|s| s.try_clone().expect("Failed to clone TPU sockets"))
                         .collect(),
                     self.cluster_info.clone(),
-                ),
-                _ => (),
+                )
             }
             Ok(())
         }
@@ -379,30 +375,27 @@ impl Fullnode {
             ls_lock.max_height_for_leader(tick_height + 1)
         };
 
-        match &mut self.node_role {
-            Some(NodeRole::AwesomeSuperNode(ref mut svcs)) => {
-                let (to_validator_tx, to_validator_rx) = channel();
-                self.role_notifiers.1 = to_validator_rx;
-                svcs.tpu.switch_to_leader(
-                    &Arc::new(self.bank.make_checkpointed_copy()),
-                    Default::default(),
-                    self.tpu_sockets
-                        .iter()
-                        .map(|s| s.try_clone().expect("Failed to clone TPU sockets"))
-                        .collect(),
-                    self.broadcast_socket
-                        .try_clone()
-                        .expect("Failed to clone broadcast socket"),
-                    self.cluster_info.clone(),
-                    self.sigverify_disabled,
-                    max_tick_height,
-                    entry_height,
-                    &last_id,
-                    self.keypair.pubkey(),
-                    to_validator_tx,
-                )
-            }
-            _ => (),
+        if let Some(NodeRole::AwesomeSuperNode(ref mut svcs)) = &mut self.node_role {
+            let (to_validator_tx, to_validator_rx) = channel();
+            self.role_notifiers.1 = to_validator_rx;
+            svcs.tpu.switch_to_leader(
+                &Arc::new(self.bank.make_checkpointed_copy()),
+                Default::default(),
+                self.tpu_sockets
+                    .iter()
+                    .map(|s| s.try_clone().expect("Failed to clone TPU sockets"))
+                    .collect(),
+                self.broadcast_socket
+                    .try_clone()
+                    .expect("Failed to clone broadcast socket"),
+                self.cluster_info.clone(),
+                self.sigverify_disabled,
+                max_tick_height,
+                entry_height,
+                &last_id,
+                self.keypair.pubkey(),
+                to_validator_tx,
+            )
         }
     }
 
@@ -446,9 +439,8 @@ impl Fullnode {
         if let Some(ref rpc_pubsub_service) = self.rpc_pubsub_service {
             rpc_pubsub_service.exit();
         }
-        match self.node_role {
-            Some(NodeRole::AwesomeSuperNode(ref svcs)) => svcs.exit(),
-            _ => (),
+        if let Some(NodeRole::AwesomeSuperNode(ref svcs)) = self.node_role {
+            svcs.exit()
         }
     }
 
@@ -511,15 +503,11 @@ impl Service for Fullnode {
 
         self.gossip_service.join()?;
 
-        match self.node_role {
-            Some(NodeRole::AwesomeSuperNode(svcs)) => {
-                if let Some(NodeServicesReturnType::Generic) = svcs.join()? {
-                    return Ok(None);
-                }
+        if let Some(NodeRole::AwesomeSuperNode(svcs)) = self.node_role {
+            if let Some(NodeServicesReturnType::Generic) = svcs.join()? {
+                return Ok(None);
             }
-            _ => (),
         }
-
         Ok(None)
     }
 }

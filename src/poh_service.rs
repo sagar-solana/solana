@@ -83,12 +83,9 @@ impl PohService {
                 Config::Tick(num) => {
                     for _ in 1..num {
                         let res = poh.hash();
-                        match res {
-                            Err(e) => {
-                                to_validator_tx.send(TpuReturnType::LeaderRotation)?;
-                                return Err(e.into());
-                            }
-                            _ => (),
+                        if let Err(e) = res {
+                            to_validator_tx.send(TpuReturnType::LeaderRotation)?;
+                            return Err(e);
                         }
                     }
                 }
@@ -97,12 +94,9 @@ impl PohService {
                 }
             }
             let res = poh.tick();
-            match res {
-                Err(e) => {
-                    to_validator_tx.send(TpuReturnType::LeaderRotation)?;
-                    return Err(e.into());
-                }
-                _ => (),
+            if let Err(e) = res {
+                to_validator_tx.send(TpuReturnType::LeaderRotation)?;
+                return Err(e);
             }
             if poh_exit.load(Ordering::Relaxed) {
                 return Ok(());
