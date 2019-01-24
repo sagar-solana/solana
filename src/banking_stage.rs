@@ -304,7 +304,7 @@ mod tests {
             &bank.last_id(),
             None,
             dummy_leader_id,
-            to_validator_tx,
+            &to_validator_tx,
         );
         drop(verified_sender);
         assert_eq!(
@@ -326,7 +326,7 @@ mod tests {
             &bank.last_id(),
             None,
             dummy_leader_id,
-            to_validator_tx,
+            &to_validator_tx,
         );
         drop(entry_receiver);
         assert_eq!(
@@ -349,7 +349,7 @@ mod tests {
             &bank.last_id(),
             None,
             dummy_leader_id,
-            to_validator_tx,
+            &to_validator_tx,
         );
         sleep(Duration::from_millis(500));
         drop(verified_sender);
@@ -379,7 +379,7 @@ mod tests {
             &bank.last_id(),
             None,
             dummy_leader_id,
-            to_validator_tx,
+            &to_validator_tx,
         );
 
         // good tx
@@ -437,7 +437,7 @@ mod tests {
             &bank.last_id(),
             None,
             dummy_leader_id,
-            to_validator_tx,
+            &to_validator_tx,
         );
 
         // Process a batch that includes a transaction that receives two tokens.
@@ -494,7 +494,7 @@ mod tests {
             &bank.last_id(),
             Some(max_tick_height),
             dummy_leader_id,
-            to_validator_tx,
+            &to_validator_tx,
         );
         assert_eq!(
             banking_stage.join().unwrap(),

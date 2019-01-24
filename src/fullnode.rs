@@ -25,10 +25,6 @@ use std::sync::{Arc, RwLock};
 use std::thread::Result;
 use std::time::Instant;
 
-pub enum NodeRole {
-    AwesomeSuperNode(NodeServices),
-}
-
 pub type TvuRotationSender = Sender<TvuReturnType>;
 pub type TvuRotationReceiver = Receiver<TvuReturnType>;
 pub type TpuRotationSender = Sender<TpuReturnType>;
@@ -71,7 +67,6 @@ pub enum FullnodeReturnType {
 }
 
 pub struct Fullnode {
-    pub node_role: Option<NodeRole>,
     keypair: Arc<Keypair>,
     exit: Arc<AtomicBool>,
     rpc_service: Option<JsonRpcService>,
@@ -82,6 +77,7 @@ pub struct Fullnode {
     sigverify_disabled: bool,
     tpu_sockets: Vec<UdpSocket>,
     broadcast_socket: UdpSocket,
+    pub node_services: NodeServices,
     pub role_notifiers: (TvuRotationReceiver, TpuRotationReceiver),
 }
 
@@ -312,7 +308,6 @@ impl Fullnode {
             scheduled_leader == keypair.pubkey(),
             to_validator_tx,
         );
-        let node_role = Some(NodeRole::AwesomeSuperNode(NodeServices::new(tpu, tvu)));
 
         inc_new_counter_info!("fullnode-new", 1);
 
@@ -324,7 +319,7 @@ impl Fullnode {
             gossip_service,
             rpc_service: Some(rpc_service),
             rpc_pubsub_service: Some(rpc_pubsub_service),
-            node_role,
+            node_services: NodeServices::new(tpu, tvu),
             exit,
             tpu_sockets: node.sockets.tpu,
             broadcast_socket: node.sockets.broadcast,
@@ -344,21 +339,17 @@ impl Fullnode {
         // in the active set, then the leader scheduler will pick the same leader again, so
         // check for that
         if scheduled_leader == self.keypair.pubkey() {
-            if let Some(NodeRole::AwesomeSuperNode(ref mut svcs)) = &mut self.node_role {
-                let (last_entry_id, entry_height) = svcs.tvu.get_state();
-                self.validator_to_leader(self.bank.tick_height(), entry_height, last_entry_id);
-            }
+            let (last_entry_id, entry_height) = self.node_services.tvu.get_state();
+            self.validator_to_leader(self.bank.tick_height(), entry_height, last_entry_id);
             Ok(())
         } else {
-            if let Some(NodeRole::AwesomeSuperNode(ref mut svcs)) = &mut self.node_role {
-                svcs.tpu.switch_to_forwarder(
-                    self.tpu_sockets
-                        .iter()
-                        .map(|s| s.try_clone().expect("Failed to clone TPU sockets"))
-                        .collect(),
-                    self.cluster_info.clone(),
-                )
-            }
+            self.node_services.tpu.switch_to_forwarder(
+                self.tpu_sockets
+                    .iter()
+                    .map(|s| s.try_clone().expect("Failed to clone TPU sockets"))
+                    .collect(),
+                self.cluster_info.clone(),
+            );
             Ok(())
         }
     }
@@ -375,58 +366,49 @@ impl Fullnode {
             ls_lock.max_height_for_leader(tick_height + 1)
         };
 
-        if let Some(NodeRole::AwesomeSuperNode(ref mut svcs)) = &mut self.node_role {
-            let (to_validator_tx, to_validator_rx) = channel();
-            self.role_notifiers.1 = to_validator_rx;
-            svcs.tpu.switch_to_leader(
-                &Arc::new(self.bank.make_checkpointed_copy()),
-                Default::default(),
-                self.tpu_sockets
-                    .iter()
-                    .map(|s| s.try_clone().expect("Failed to clone TPU sockets"))
-                    .collect(),
-                self.broadcast_socket
-                    .try_clone()
-                    .expect("Failed to clone broadcast socket"),
-                self.cluster_info.clone(),
-                self.sigverify_disabled,
-                max_tick_height,
-                entry_height,
-                &last_id,
-                self.keypair.pubkey(),
-                to_validator_tx,
-            )
-        }
+        let (to_validator_tx, to_validator_rx) = channel();
+        self.role_notifiers.1 = to_validator_rx;
+        self.node_services.tpu.switch_to_leader(
+            &Arc::new(self.bank.make_checkpointed_copy()),
+            Default::default(),
+            self.tpu_sockets
+                .iter()
+                .map(|s| s.try_clone().expect("Failed to clone TPU sockets"))
+                .collect(),
+            self.broadcast_socket
+                .try_clone()
+                .expect("Failed to clone broadcast socket"),
+            self.cluster_info.clone(),
+            self.sigverify_disabled,
+            max_tick_height,
+            entry_height,
+            &last_id,
+            self.keypair.pubkey(),
+            to_validator_tx,
+        )
     }
 
     pub fn check_role_exited(&self) -> bool {
-        match self.node_role {
-            Some(NodeRole::AwesomeSuperNode(ref svcs)) => svcs.is_exited(),
-            None => false,
-        }
+        self.node_services.is_exited()
     }
 
     pub fn handle_role_transition(&mut self) -> Result<Option<FullnodeReturnType>> {
-        let node_role = &self.node_role;
-        match node_role {
-            Some(NodeRole::AwesomeSuperNode(_)) => loop {
-                let should_be_fwdr = self.role_notifiers.1.try_recv();
-                let should_be_leader = self.role_notifiers.0.try_recv();
-                match should_be_leader {
-                    Ok(TvuReturnType::LeaderRotation(tick_height, entry_height, last_entry_id)) => {
-                        self.validator_to_leader(tick_height, entry_height, last_entry_id);
-                        return Ok(Some(FullnodeReturnType::ValidatorToLeaderRotation));
-                    }
-                    _ => match should_be_fwdr {
-                        Ok(TpuReturnType::LeaderRotation) => {
-                            self.leader_to_validator()?;
-                            return Ok(Some(FullnodeReturnType::LeaderToValidatorRotation));
-                        }
-                        _ => continue,
-                    },
+        loop {
+            let should_be_fwdr = self.role_notifiers.1.try_recv();
+            let should_be_leader = self.role_notifiers.0.try_recv();
+            match should_be_leader {
+                Ok(TvuReturnType::LeaderRotation(tick_height, entry_height, last_entry_id)) => {
+                    self.validator_to_leader(tick_height, entry_height, last_entry_id);
+                    return Ok(Some(FullnodeReturnType::ValidatorToLeaderRotation));
                 }
-            },
-            _ => Ok(None),
+                _ => match should_be_fwdr {
+                    Ok(TpuReturnType::LeaderRotation) => {
+                        self.leader_to_validator()?;
+                        return Ok(Some(FullnodeReturnType::LeaderToValidatorRotation));
+                    }
+                    _ => continue,
+                },
+            }
         }
     }
 
@@ -439,9 +421,7 @@ impl Fullnode {
         if let Some(ref rpc_pubsub_service) = self.rpc_pubsub_service {
             rpc_pubsub_service.exit();
         }
-        if let Some(NodeRole::AwesomeSuperNode(ref svcs)) = self.node_role {
-            svcs.exit()
-        }
+        self.node_services.exit()
     }
 
     pub fn close(self) -> Result<(Option<FullnodeReturnType>)> {
@@ -502,12 +482,7 @@ impl Service for Fullnode {
         }
 
         self.gossip_service.join()?;
-
-        if let Some(NodeRole::AwesomeSuperNode(svcs)) = self.node_role {
-            if let Some(NodeServicesReturnType::Generic) = svcs.join()? {
-                return Ok(None);
-            }
-        }
+        self.node_services.join()?;
         Ok(None)
     }
 }
@@ -518,7 +493,7 @@ mod tests {
     use crate::cluster_info::Node;
     use crate::db_ledger::*;
     use crate::entry::make_consecutive_blobs;
-    use crate::fullnode::{Fullnode, FullnodeReturnType, NodeRole};
+    use crate::fullnode::{Fullnode, FullnodeReturnType};
     use crate::leader_scheduler::{
         make_active_set_entries, LeaderScheduler, LeaderSchedulerConfig,
     };
@@ -696,13 +671,7 @@ mod tests {
                 panic!("Expected a leader transition");
             }
         }
-
-        match bootstrap_leader.node_role {
-            Some(NodeRole::AwesomeSuperNode(svcs)) => assert!(svcs.tpu.is_leader()),
-            _ => {
-                panic!("Expected bootstrap leader to be a leader");
-            }
-        }
+        assert!(bootstrap_leader.node_services.tpu.is_leader());
     }
 
     #[test]
@@ -800,12 +769,7 @@ mod tests {
                 None,
             );
 
-            match &bootstrap_leader.node_role {
-                Some(NodeRole::AwesomeSuperNode(svcs)) => assert!(!svcs.tpu.is_leader()),
-                _ => {
-                    panic!("Expected bootstrap leader to be a validator");
-                }
-            }
+            assert!(!bootstrap_leader.node_services.tpu.is_leader());
 
             // Test that a node knows to transition to a leader based on parsing the ledger
             let validator = Fullnode::new(
@@ -819,12 +783,7 @@ mod tests {
                 None,
             );
 
-            match &validator.node_role {
-                Some(NodeRole::AwesomeSuperNode(svcs)) => assert!(svcs.tpu.is_leader()),
-                _ => {
-                    panic!("Expected validator node to be the leader");
-                }
-            }
+            assert!(validator.node_services.tpu.is_leader());
 
             validator.close().expect("Expected leader node to close");
             bootstrap_leader
@@ -955,28 +914,22 @@ mod tests {
             validator.bank.get_current_leader().unwrap().0,
             validator.keypair.pubkey()
         );
-        let node_role = &validator.node_role;
-        match node_role {
-            Some(NodeRole::AwesomeSuperNode(ref svcs)) => loop {
-                let should_be_fwdr = validator.role_notifiers.1.try_recv();
-                let should_be_leader = validator.role_notifiers.0.try_recv();
-                match should_be_leader {
-                    Ok(TvuReturnType::LeaderRotation(tick_height, entry_height, _)) => {
-                        assert_eq!(svcs.tvu.get_state().1, entry_height);
-                        assert_eq!(validator.bank.tick_height(), tick_height);
-                        assert_eq!(tick_height, bootstrap_height);
-                        break;
-                    }
-                    _ => match should_be_fwdr {
-                        Ok(TpuReturnType::LeaderRotation) => {
-                            panic!("shouldn't be rotation to fwdr")
-                        }
-                        _ => continue,
-                    },
+        loop {
+            let should_be_fwdr = validator.role_notifiers.1.try_recv();
+            let should_be_leader = validator.role_notifiers.0.try_recv();
+            match should_be_leader {
+                Ok(TvuReturnType::LeaderRotation(tick_height, entry_height, _)) => {
+                    assert_eq!(validator.node_services.tvu.get_state().1, entry_height);
+                    assert_eq!(validator.bank.tick_height(), tick_height);
+                    assert_eq!(tick_height, bootstrap_height);
+                    break;
                 }
-            },
-            _ => panic!("Wrong node role"),
-        };
+                _ => match should_be_fwdr {
+                    Ok(TpuReturnType::LeaderRotation) => panic!("shouldn't be rotation to fwdr"),
+                    _ => continue,
+                },
+            }
+        }
 
         validator.close().unwrap(); //doing this so that we can grab rocksdb again
         let (bank, entry_height, _) = Fullnode::new_bank_from_ledger(
