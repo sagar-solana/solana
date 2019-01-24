@@ -164,11 +164,8 @@ mod tests {
 
         const HASHES_PER_TICK: u64 = 2;
         let (sender, _) = channel();
-        let poh_service = PohService::new(
-            poh_recorder,
-            Config::Tick(HASHES_PER_TICK as usize),
-            sender,
-        );
+        let poh_service =
+            PohService::new(poh_recorder, Config::Tick(HASHES_PER_TICK as usize), sender);
 
         // get some events
         let mut hashes = 0;
