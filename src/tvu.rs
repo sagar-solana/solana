@@ -61,7 +61,7 @@ impl Tvu {
     /// * `sockets` - My fetch, repair, and restransmit sockets
     /// * `db_ledger` - the ledger itself
     pub fn new(
-        vote_signer: &Arc<VoteSignerProxy>,
+        vote_signer: Arc<VoteSignerProxy>,
         bank: &Arc<Bank>,
         entry_height: u64,
         last_entry_id: Hash,
@@ -69,7 +69,7 @@ impl Tvu {
         sockets: Sockets,
         db_ledger: Arc<DbLedger>,
         storage_rotate_count: u64,
-        to_leader_tx: TvuRotationSender,
+        to_leader_sender: TvuRotationSender,
     ) -> Self {
         let exit = Arc::new(AtomicBool::new(false));
         let keypair: Arc<Keypair> = cluster_info
@@ -111,14 +111,14 @@ impl Tvu {
 
         let (replay_stage, ledger_entry_receiver) = ReplayStage::new(
             keypair.clone(),
-            vote_signer.clone(),
+            vote_signer,
             bank.clone(),
             cluster_info.clone(),
             blob_window_receiver,
             exit.clone(),
             l_entry_height.clone(),
             l_last_entry_id.clone(),
-            to_leader_tx,
+            to_leader_sender,
         );
 
         let storage_stage = StorageStage::new(

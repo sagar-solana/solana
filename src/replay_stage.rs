@@ -206,7 +206,7 @@ impl ReplayStage {
         exit: Arc<AtomicBool>,
         entry_height: Arc<RwLock<u64>>,
         last_entry_id: Arc<RwLock<Hash>>,
-        to_leader_tx: TvuRotationSender,
+        to_leader_sender: TvuRotationSender,
     ) -> (Self, EntryReceiver) {
         let (vote_blob_sender, vote_blob_receiver) = channel();
         let (ledger_entry_sender, ledger_entry_receiver) = channel();
@@ -228,7 +228,7 @@ impl ReplayStage {
                         .get_current_leader()
                         .expect("Scheduled leader should be calculated by this point");
                     if leader_id != last_leader_id && leader_id == keypair.pubkey() {
-                        to_leader_tx
+                        to_leader_sender
                             .send(TvuReturnType::LeaderRotation(
                                 bank.tick_height(),
                                 *entry_height_.read().unwrap(),
@@ -484,7 +484,7 @@ mod test {
             &my_keypair,
             Box::new(LocalVoteSigner::default()),
         ));
-        let (to_leader_tx, _) = channel();
+        let (to_leader_sender, _) = channel();
         let (replay_stage, ledger_writer_recv) = ReplayStage::new(
             my_keypair.clone(),
             vote_signer.clone(),
@@ -494,7 +494,7 @@ mod test {
             exit.clone(),
             Arc::new(RwLock::new(initial_entry_len as u64)),
             Arc::new(RwLock::new(last_entry_id)),
-            to_leader_tx,
+            to_leader_sender,
         );
 
         // Vote sender should error because no leader contact info is found in the

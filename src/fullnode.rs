@@ -267,11 +267,11 @@ impl Fullnode {
         };
 
         //setup channels for rotation indications
-        let (to_leader_tx, to_leader_rx) = channel();
-        let (to_validator_tx, to_validator_rx) = channel();
+        let (to_leader_sender, to_leader_receiver) = channel();
+        let (to_validator_sender, to_validator_receiver) = channel();
 
         let tvu = Tvu::new(
-            &vote_signer,
+            vote_signer,
             &bank,
             entry_height,
             *last_entry_id,
@@ -279,7 +279,7 @@ impl Fullnode {
             sockets,
             db_ledger.clone(),
             storage_rotate_count,
-            to_leader_tx,
+            to_leader_sender,
         );
         // move tpu forwarder into tpu, move broadcast service into tpu.
         let max_tick_height = {
@@ -306,7 +306,7 @@ impl Fullnode {
             last_entry_id,
             keypair.pubkey(),
             scheduled_leader == keypair.pubkey(),
-            to_validator_tx,
+            &to_validator_sender,
         );
 
         inc_new_counter_info!("fullnode-new", 1);
@@ -323,7 +323,7 @@ impl Fullnode {
             exit,
             tpu_sockets: node.sockets.tpu,
             broadcast_socket: node.sockets.broadcast,
-            role_notifiers: (to_leader_rx, to_validator_rx),
+            role_notifiers: (to_leader_receiver, to_validator_receiver),
         }
     }
 
@@ -366,8 +366,8 @@ impl Fullnode {
             ls_lock.max_height_for_leader(tick_height + 1)
         };
 
-        let (to_validator_tx, to_validator_rx) = channel();
-        self.role_notifiers.1 = to_validator_rx;
+        let (to_validator_sender, to_validator_receiver) = channel();
+        self.role_notifiers.1 = to_validator_receiver;
         self.node_services.tpu.switch_to_leader(
             &Arc::new(self.bank.make_checkpointed_copy()),
             Default::default(),
@@ -384,7 +384,7 @@ impl Fullnode {
             entry_height,
             &last_id,
             self.keypair.pubkey(),
-            to_validator_tx,
+            &to_validator_sender,
         )
     }
 

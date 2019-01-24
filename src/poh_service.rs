@@ -47,7 +47,7 @@ impl PohService {
     pub fn new(
         poh_recorder: PohRecorder,
         config: Config,
-        to_validator_tx: TpuRotationSender,
+        to_validator_sender: TpuRotationSender,
     ) -> Self {
         // PohService is a headless producer, so when it exits it should notify the banking stage.
         // Since channel are not used to talk between these threads an AtomicBool is used as a
@@ -60,7 +60,7 @@ impl PohService {
             .spawn(move || {
                 let mut poh_recorder_ = poh_recorder;
                 let return_value =
-                    Self::tick_producer(&mut poh_recorder_, config, &poh_exit_, to_validator_tx);
+                    Self::tick_producer(&mut poh_recorder_, config, &poh_exit_, &to_validator_sender);
                 poh_exit_.store(true, Ordering::Relaxed);
                 return_value
             })
@@ -76,7 +76,7 @@ impl PohService {
         poh: &mut PohRecorder,
         config: Config,
         poh_exit: &AtomicBool,
-        to_validator_tx: TpuRotationSender,
+        to_validator_sender: &TpuRotationSender,
     ) -> Result<()> {
         loop {
             match config {
@@ -84,7 +84,7 @@ impl PohService {
                     for _ in 1..num {
                         let res = poh.hash();
                         if let Err(e) = res {
-                            to_validator_tx.send(TpuReturnType::LeaderRotation)?;
+                            to_validator_sender.send(TpuReturnType::LeaderRotation)?;
                             return Err(e);
                         }
                     }
@@ -95,7 +95,7 @@ impl PohService {
             }
             let res = poh.tick();
             if let Err(e) = res {
-                to_validator_tx.send(TpuReturnType::LeaderRotation)?;
+                to_validator_sender.send(TpuReturnType::LeaderRotation)?;
                 return Err(e);
             }
             if poh_exit.load(Ordering::Relaxed) {
@@ -159,8 +159,12 @@ mod tests {
         };
 
         const HASHES_PER_TICK: u64 = 2;
-        let (tx, _) = channel();
-        let poh_service = PohService::new(poh_recorder, Config::Tick(HASHES_PER_TICK as usize), tx);
+        let (sender, _) = channel();
+        let poh_service = PohService::new(
+            poh_recorder,
+            Config::Tick(HASHES_PER_TICK as usize),
+            &sender,
+        );
 
         // get some events
         let mut hashes = 0;

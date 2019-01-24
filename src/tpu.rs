@@ -80,7 +80,7 @@ impl Tpu {
         last_entry_id: &Hash,
         leader_id: Pubkey,
         is_leader: bool,
-        to_validator_tx: TpuRotationSender,
+        to_validator_sender: &TpuRotationSender,
     ) -> Self {
         let exit = Arc::new(AtomicBool::new(false));
 
@@ -98,7 +98,7 @@ impl Tpu {
                 last_entry_id,
                 max_tick_height,
                 leader_id,
-                &to_validator_tx,
+                &to_validator_sender,
             );
 
             let broadcast_service = BroadcastService::new(
@@ -161,7 +161,7 @@ impl Tpu {
         entry_height: u64,
         last_entry_id: &Hash,
         leader_id: Pubkey,
-        to_validator_tx: TpuRotationSender,
+        to_validator_sender: &TpuRotationSender,
     ) {
         match &self.tpu_mode {
             TpuMode::Leader(svcs) => {
@@ -185,7 +185,7 @@ impl Tpu {
             last_entry_id,
             max_tick_height,
             leader_id,
-            &to_validator_tx,
+            &to_validator_sender,
         );
 
         let broadcast_service = BroadcastService::new(
