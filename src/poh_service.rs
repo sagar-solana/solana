@@ -59,8 +59,12 @@ impl PohService {
             .name("solana-poh-service-tick_producer".to_string())
             .spawn(move || {
                 let mut poh_recorder_ = poh_recorder;
-                let return_value =
-                    Self::tick_producer(&mut poh_recorder_, config, &poh_exit_, &to_validator_sender);
+                let return_value = Self::tick_producer(
+                    &mut poh_recorder_,
+                    config,
+                    &poh_exit_,
+                    &to_validator_sender,
+                );
                 poh_exit_.store(true, Ordering::Relaxed);
                 return_value
             })
