@@ -109,7 +109,7 @@ fn bench_banking_stage_multi_accounts(bencher: &mut Bencher) {
         &mint.last_id(),
         None,
         dummy_leader_id,
-        to_leader_sender,
+        &to_leader_sender,
     );
 
     let mut id = mint.last_id();
@@ -219,7 +219,7 @@ fn bench_banking_stage_multi_programs(bencher: &mut Bencher) {
         &mint.last_id(),
         None,
         dummy_leader_id,
-        to_leader_sender,
+        &to_leader_sender,
     );
 
     let mut id = mint.last_id();

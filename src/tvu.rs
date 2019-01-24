@@ -284,7 +284,7 @@ pub mod tests {
             VoteSignerProxy::new(&vote_account_keypair, Box::new(LocalVoteSigner::default()));
         let (tx, _) = channel();
         let tvu = Tvu::new(
-            &Arc::new(vote_signer),
+            Arc::new(vote_signer),
             &bank,
             0,
             cur_hash,

@@ -167,7 +167,7 @@ mod tests {
         let poh_service = PohService::new(
             poh_recorder,
             Config::Tick(HASHES_PER_TICK as usize),
-            &sender,
+            sender,
         );
 
         // get some events
