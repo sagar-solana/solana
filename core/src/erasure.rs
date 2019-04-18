@@ -1,8 +1,7 @@
 // Support erasure coding
-use crate::packet::{Blob, SharedBlob};
+use crate::packet::Blob;
 use crate::result::{Error, Result};
 use std::cmp;
-use std::sync::{Arc, RwLock};
 
 //TODO(sakridge) pick these values
 pub const NUM_DATA: usize = 16; // number of data blobs
@@ -230,7 +229,7 @@ pub fn decode_blocks(
 //
 //
 pub struct CodingGenerator {
-    leftover: Vec<SharedBlob>, // SharedBlobs that couldn't be used in last call to next()
+    leftover: Vec<Blob>, // Blobs that couldn't be used in last call to next()
 }
 
 impl Default for CodingGenerator {
@@ -248,12 +247,12 @@ impl CodingGenerator {
 
     // must be called with consecutive data blobs from previous invocation
     // blobs from a new slot not start halfway through next_data
-    pub fn next(&mut self, next_data: &[SharedBlob]) -> Vec<SharedBlob> {
+    pub fn next(&mut self, next_data: &[Blob]) -> Vec<Blob> {
         let mut next_coding =
             Vec::with_capacity((self.leftover.len() + next_data.len()) / NUM_DATA * NUM_CODING);
 
         if self.leftover.len() > 0 && next_data.len() > 0 {
-            if self.leftover[0].read().unwrap().slot() != next_data[0].read().unwrap().slot() {
+            if self.leftover[0].slot() != next_data[0].slot() {
                 self.leftover.clear(); // reset on slot boundaries
             }
         }
@@ -270,19 +269,18 @@ impl CodingGenerator {
             let max_data_size = align!(
                 data_blobs
                     .iter()
-                    .fold(0, |max, blob| cmp::max(blob.read().unwrap().meta.size, max)),
+                    .fold(0, |max, blob| cmp::max(blob.meta.size, max)),
                 wb()
             );
 
-            let data_locks: Vec<_> = data_blobs.iter().map(|b| b.read().unwrap()).collect();
-            let data_ptrs: Vec<_> = data_locks
+            let data_ptrs: Vec<_> = data_blobs
                 .iter()
-                .map(|l| &l.data[..max_data_size])
+                .map(|b| &b.data[..max_data_size])
                 .collect();
 
             let mut coding_blobs = Vec::with_capacity(NUM_CODING);
 
-            for data_blob in &data_locks[..NUM_CODING] {
+            for data_blob in &data_blobs[..NUM_CODING] {
                 let index = data_blob.index();
                 let slot = data_blob.slot();
                 let id = data_blob.id();
@@ -314,9 +312,6 @@ impl CodingGenerator {
         }
 
         next_coding
-            .into_iter()
-            .map(|blob| Arc::new(RwLock::new(blob)))
-            .collect()
     }
 }
 
@@ -326,7 +321,7 @@ pub mod test {
     use crate::blocktree::get_tmp_ledger_path;
     use crate::blocktree::Blocktree;
     use crate::entry::{make_tiny_test_entries, EntrySlice};
-    use crate::packet::{index_blobs, SharedBlob, BLOB_DATA_SIZE, BLOB_HEADER_SIZE};
+    use crate::packet::{index_blobs, BLOB_DATA_SIZE, BLOB_HEADER_SIZE};
     use solana_sdk::pubkey::Pubkey;
     use solana_sdk::signature::{Keypair, KeypairUtil};
     use std::borrow::Borrow;
@@ -362,8 +357,8 @@ pub mod test {
     pub struct ErasureSetModel {
         pub set_index: u64,
         pub start_index: u64,
-        pub coding: Vec<SharedBlob>,
-        pub data: Vec<SharedBlob>,
+        pub coding: Vec<Blob>,
+        pub data: Vec<Blob>,
     }
 
     #[test]
@@ -415,52 +410,33 @@ pub mod test {
         assert_eq!(v_orig, vs[0]);
     }
 
-    fn test_toss_and_recover(
-        data_blobs: &[SharedBlob],
-        coding_blobs: &[SharedBlob],
-        block_start_idx: usize,
-    ) {
-        let size = coding_blobs[0].read().unwrap().size();
+    fn test_toss_and_recover(data_blobs: &[Blob], coding_blobs: &[Blob], block_start_idx: usize) {
+        let size = coding_blobs[0].size();
 
         // toss one data and one coding
         let erasures: Vec<i32> = vec![0, NUM_DATA as i32, -1];
 
-        let mut blobs: Vec<SharedBlob> = Vec::with_capacity(ERASURE_SET_SIZE);
+        let mut blobs: Vec<Blob> = Vec::with_capacity(ERASURE_SET_SIZE);
 
-        blobs.push(SharedBlob::default()); // empty data, erasure at zero
+        blobs.push(Blob::default()); // empty data, erasure at zero
         for blob in &data_blobs[block_start_idx + 1..block_start_idx + NUM_DATA] {
             // skip first blob
             blobs.push(blob.clone());
         }
-        blobs.push(SharedBlob::default()); // empty coding, erasure at zero
+        blobs.push(Blob::default()); // empty coding, erasure at zero
         for blob in &coding_blobs[1..NUM_CODING] {
             blobs.push(blob.clone());
         }
 
-        let corrupt = decode_blobs(&blobs, &erasures, size, block_start_idx as u64, 0).unwrap();
+        let corrupt = decode_blobs(&mut blobs, &erasures, size, block_start_idx as u64, 0).unwrap();
 
         assert!(!corrupt);
 
-        assert_eq!(
-            blobs[1].read().unwrap().meta,
-            data_blobs[block_start_idx + 1].read().unwrap().meta
-        );
-        assert_eq!(
-            blobs[1].read().unwrap().data(),
-            data_blobs[block_start_idx + 1].read().unwrap().data()
-        );
-        assert_eq!(
-            blobs[0].read().unwrap().meta,
-            data_blobs[block_start_idx].read().unwrap().meta
-        );
-        assert_eq!(
-            blobs[0].read().unwrap().data(),
-            data_blobs[block_start_idx].read().unwrap().data()
-        );
-        assert_eq!(
-            blobs[NUM_DATA].read().unwrap().data(),
-            coding_blobs[0].read().unwrap().data()
-        );
+        assert_eq!(blobs[1].meta, data_blobs[block_start_idx + 1].meta);
+        assert_eq!(blobs[1].data(), data_blobs[block_start_idx + 1].data());
+        assert_eq!(blobs[0].meta, data_blobs[block_start_idx].meta);
+        assert_eq!(blobs[0].data(), data_blobs[block_start_idx].data());
+        assert_eq!(blobs[NUM_DATA].data(), coding_blobs[0].data());
     }
 
     #[test]
@@ -486,7 +462,7 @@ pub mod test {
 
                 for j in 0..NUM_CODING {
                     assert_eq!(
-                        coding_blobs[j].read().unwrap().index(),
+                        coding_blobs[j].index(),
                         ((i / NUM_DATA) * NUM_DATA + j) as u64
                     );
                 }
@@ -502,10 +478,10 @@ pub mod test {
         let mut coding_generator = CodingGenerator::new();
 
         // test coding by iterating one blob at a time
-        let data_blobs = generate_test_blobs(0, NUM_DATA * 2);
+        let mut data_blobs = generate_test_blobs(0, NUM_DATA * 2);
 
         for i in NUM_DATA..NUM_DATA * 2 {
-            data_blobs[i].write().unwrap().set_slot(1);
+            data_blobs[i].set_slot(1);
         }
 
         let coding_blobs = coding_generator.next(&data_blobs[0..NUM_DATA - 1]);
@@ -621,32 +597,23 @@ pub mod test {
                             let mut coding = Vec::with_capacity(NUM_CODING);
                             let erasures = vec![0, 1, 2, NUM_DATA as i32, -1];
 
-                            data.push(SharedBlob::default());
-                            data.push(SharedBlob::default());
-                            data.push(SharedBlob::default());
+                            data.push(Blob::default());
+                            data.push(Blob::default());
+                            data.push(Blob::default());
                             for blob in erasure_set.data.into_iter().skip(3) {
                                 data.push(blob);
                             }
 
-                            coding.push(SharedBlob::default());
+                            coding.push(Blob::default());
                             for blob in erasure_set.coding.into_iter().skip(1) {
                                 coding.push(blob);
                             }
 
-                            let size = erased_coding.read().unwrap().data_size() as usize;
+                            let size = erased_coding.data_size() as usize;
 
-                            let mut data_locks: Vec<_> =
-                                data.iter().map(|shared| shared.write().unwrap()).collect();
-                            let mut coding_locks: Vec<_> = coding
-                                .iter()
-                                .map(|shared| shared.write().unwrap())
-                                .collect();
-
-                            let mut data_ptrs: Vec<_> = data_locks
-                                .iter_mut()
-                                .map(|blob| &mut blob.data[..size])
-                                .collect();
-                            let mut coding_ptrs: Vec<_> = coding_locks
+                            let mut data_ptrs: Vec<_> =
+                                data.iter_mut().map(|blob| &mut blob.data[..size]).collect();
+                            let mut coding_ptrs: Vec<_> = coding
                                 .iter_mut()
                                 .map(|blob| &mut blob.data_mut()[..size])
                                 .collect();
@@ -662,12 +629,7 @@ pub mod test {
                                 .expect("decoding must succeed");
                             }
 
-                            drop(coding_locks);
-                            drop(data_locks);
-
-                            for (expected, recovered) in erased_data.iter().zip(data.iter()) {
-                                let expected = expected.read().unwrap();
-                                let mut recovered = recovered.write().unwrap();
+                            for (expected, recovered) in erased_data.iter().zip(data.iter_mut()) {
                                 let data_size = recovered.data_size() as usize - BLOB_HEADER_SIZE;
                                 recovered.set_size(data_size);
                                 let corrupt = data_size > BLOB_DATA_SIZE;
@@ -675,10 +637,7 @@ pub mod test {
                                 assert_eq!(&*expected, &*recovered);
                             }
 
-                            assert_eq!(
-                                erased_coding.read().unwrap().data(),
-                                coding[0].read().unwrap().data()
-                            );
+                            assert_eq!(erased_coding.data(), coding[0].data());
 
                             debug!("passed set: {}", erasure_set.set_index);
                         }
@@ -713,9 +672,9 @@ pub mod test {
                     let set_index = erasure_spec.set_index as usize;
                     let start_index = set_index * NUM_DATA;
 
-                    let mut blobs = make_tiny_test_entries(NUM_DATA).to_single_entry_shared_blobs();
+                    let mut blobs = make_tiny_test_entries(NUM_DATA).to_single_entry_blobs();
                     index_blobs(
-                        &blobs,
+                        &mut blobs,
                         &Keypair::new().pubkey(),
                         start_index as u64,
                         slot,
@@ -754,8 +713,7 @@ pub mod test {
             for erasure_set in slot_model.chunks {
                 blocktree.write_shared_blobs(erasure_set.data).unwrap();
 
-                for shared_coding_blob in erasure_set.coding.into_iter() {
-                    let blob = shared_coding_blob.read().unwrap();
+                for blob in erasure_set.coding.into_iter() {
                     blocktree
                         .put_coding_blob_bytes_raw(
                             slot,
@@ -770,15 +728,15 @@ pub mod test {
         blocktree
     }
 
-    fn generate_test_blobs(offset: usize, num_blobs: usize) -> Vec<SharedBlob> {
-        let blobs = make_tiny_test_entries(num_blobs).to_single_entry_shared_blobs();
+    fn generate_test_blobs(offset: usize, num_blobs: usize) -> Vec<Blob> {
+        let mut blobs = make_tiny_test_entries(num_blobs).to_single_entry_blobs();
 
-        index_blobs(&blobs, &Pubkey::new_rand(), offset as u64, 0, 0);
+        index_blobs(&mut blobs, &Pubkey::new_rand(), offset as u64, 0, 0);
         blobs
     }
 
     fn decode_blobs(
-        blobs: &[SharedBlob],
+        blobs: &mut [Blob],
         erasures: &[i32],
         size: usize,
         block_start_idx: u64,
@@ -790,7 +748,7 @@ pub mod test {
 
         assert_eq!(blobs.len(), ERASURE_SET_SIZE);
         for b in blobs {
-            locks.push(b.write().unwrap());
+            locks.push(b);
         }
 
         for (i, l) in locks.iter_mut().enumerate() {
