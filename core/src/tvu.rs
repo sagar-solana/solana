@@ -24,6 +24,7 @@ use crate::service::Service;
 use crate::shred_fetch_stage::ShredFetchStage;
 use crate::snapshot_packager_service::SnapshotPackagerService;
 use crate::storage_stage::{StorageStage, StorageState};
+use crate::tower_snapshot_service::TowerSender;
 use solana_ledger::bank_forks::BankForks;
 use solana_ledger::blocktree::{Blocktree, CompletedSlotsReceiver};
 use solana_ledger::leader_schedule_cache::LeaderScheduleCache;
@@ -79,6 +80,7 @@ impl Tvu {
         exit: &Arc<AtomicBool>,
         completed_slots_receiver: CompletedSlotsReceiver,
         fork_confidence_cache: Arc<RwLock<ForkConfidenceCache>>,
+        tower_sender: TowerSender,
     ) -> Self
     where
         T: 'static + KeypairUtil + Sync + Send,
@@ -155,6 +157,7 @@ impl Tvu {
             vec![blockstream_slot_sender, ledger_cleanup_slot_sender],
             snapshot_package_sender,
             fork_confidence_cache,
+            tower_sender,
         );
 
         let blockstream_service = if let Some(blockstream_unix_socket) = blockstream_unix_socket {
@@ -248,7 +251,7 @@ pub mod tests {
         let mut cluster_info1 = ClusterInfo::new_with_invalid_keypair(target1.info.clone());
         cluster_info1.insert_info(leader.info.clone());
         let cref1 = Arc::new(RwLock::new(cluster_info1));
-
+        let (tower_sender, _tower_receiver) = channel();
         let (blocktree_path, _) = create_new_tmp_ledger!(&genesis_block);
         let (blocktree, l_receiver, completed_slots_receiver) =
             Blocktree::open_with_signal(&blocktree_path)
@@ -286,6 +289,7 @@ pub mod tests {
             &exit,
             completed_slots_receiver,
             fork_confidence_cache,
+            tower_sender,
         );
         exit.store(true, Ordering::Relaxed);
         tvu.join().unwrap();

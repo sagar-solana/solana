@@ -13,6 +13,7 @@ pub mod cluster_info_vote_listener;
 pub mod confidence;
 pub mod recycler;
 pub mod shred_fetch_stage;
+pub mod tower_snapshot_service;
 #[macro_use]
 pub mod contact_info;
 pub mod archiver;

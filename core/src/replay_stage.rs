@@ -10,12 +10,12 @@ use crate::poh_recorder::PohRecorder;
 use crate::result::{Error, Result};
 use crate::rpc_subscriptions::RpcSubscriptions;
 use crate::service::Service;
+use crate::tower_snapshot_service::TowerSender;
 use solana_ledger::bank_forks::BankForks;
 use solana_ledger::blocktree::{Blocktree, BlocktreeError};
 use solana_ledger::blocktree_processor;
 use solana_ledger::entry::{Entry, EntrySlice};
 use solana_ledger::leader_schedule_cache::LeaderScheduleCache;
-use solana_ledger::snapshot_package::SnapshotPackageSender;
 use solana_metrics::{datapoint_warn, inc_new_counter_info};
 use solana_runtime::bank::Bank;
 use solana_sdk::hash::Hash;
@@ -151,6 +151,7 @@ impl ReplayStage {
         slot_full_senders: Vec<Sender<(u64, Pubkey)>>,
         snapshot_package_sender: Option<SnapshotPackageSender>,
         fork_confidence_cache: Arc<RwLock<ForkConfidenceCache>>,
+        tower_sender: TowerSender,
     ) -> (Self, Receiver<Vec<Arc<Bank>>>)
     where
         T: 'static + KeypairUtil + Send + Sync,
@@ -237,6 +238,7 @@ impl ReplayStage {
                             total_staked,
                             &lockouts_sender,
                             &snapshot_package_sender,
+                            &tower_sender,
                         )?;
 
                         Self::reset_poh_recorder(
@@ -474,6 +476,7 @@ impl ReplayStage {
         total_staked: u64,
         lockouts_sender: &Sender<ConfidenceAggregationData>,
         snapshot_package_sender: &Option<SnapshotPackageSender>,
+        tower_sender: &Sender<Tower>,
     ) -> Result<()>
     where
         T: 'static + KeypairUtil + Send + Sync,
@@ -525,6 +528,10 @@ impl ReplayStage {
             let blockhash = bank.last_blockhash();
             vote_tx.partial_sign(&[node_keypair.as_ref()], blockhash);
             vote_tx.partial_sign(&[voting_keypair.as_ref()], blockhash);
+            // before publishing the latest vote on the network, send the tower to the tower snapshot service
+            if let Err(e) = tower_sender.send(tower.clone()) {
+                error!("Unable to backup tower, {:?}", e);
+            }
             cluster_info.write().unwrap().push_vote(vote_tx);
         }
         Ok(())

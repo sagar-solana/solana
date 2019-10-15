@@ -29,7 +29,7 @@ impl StakeLockout {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Serialize, Deserialize)]
 pub struct Tower {
     node_pubkey: Pubkey,
     threshold_depth: usize,
