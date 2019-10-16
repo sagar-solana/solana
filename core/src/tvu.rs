@@ -31,7 +31,7 @@ use solana_ledger::leader_schedule_cache::LeaderScheduleCache;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, KeypairUtil};
 use std::net::UdpSocket;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, Mutex, RwLock};
@@ -80,7 +80,7 @@ impl Tvu {
         exit: &Arc<AtomicBool>,
         completed_slots_receiver: CompletedSlotsReceiver,
         fork_confidence_cache: Arc<RwLock<ForkConfidenceCache>>,
-        tower_sender: TowerSender,
+        tower_snapshot_path: &Path,
     ) -> Self
     where
         T: 'static + KeypairUtil + Sync + Send,
@@ -157,7 +157,7 @@ impl Tvu {
             vec![blockstream_slot_sender, ledger_cleanup_slot_sender],
             snapshot_package_sender,
             fork_confidence_cache,
-            tower_sender,
+            tower_snapshot_path.to_path_buf(),
         );
 
         let blockstream_service = if let Some(blockstream_unix_socket) = blockstream_unix_socket {
@@ -251,7 +251,6 @@ pub mod tests {
         let mut cluster_info1 = ClusterInfo::new_with_invalid_keypair(target1.info.clone());
         cluster_info1.insert_info(leader.info.clone());
         let cref1 = Arc::new(RwLock::new(cluster_info1));
-        let (tower_sender, _tower_receiver) = channel();
         let (blocktree_path, _) = create_new_tmp_ledger!(&genesis_block);
         let (blocktree, l_receiver, completed_slots_receiver) =
             Blocktree::open_with_signal(&blocktree_path)
@@ -289,7 +288,7 @@ pub mod tests {
             &exit,
             completed_slots_receiver,
             fork_confidence_cache,
-            tower_sender,
+            &blocktree_path,
         );
         exit.store(true, Ordering::Relaxed);
         tvu.join().unwrap();

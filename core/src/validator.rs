@@ -30,12 +30,11 @@ use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, KeypairUtil};
 use solana_sdk::timing::timestamp;
 
-use crate::tower_snapshot_service::TowerSnapshotService;
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::Result;
 
@@ -100,7 +99,6 @@ pub struct Validator {
     tpu: Tpu,
     tvu: Tvu,
     ip_echo_server: solana_netutil::IpEchoServer,
-    tower_snapshot_service: TowerSnapshotService,
 }
 
 impl Validator {
@@ -251,10 +249,6 @@ impl Validator {
             "New blob signal for the TVU should be the same as the clear bank signal."
         );
 
-        let (tower_sender, tower_receiver) = channel();
-        let tower_snapshot_service =
-            TowerSnapshotService::new(ledger_path.to_path_buf(), tower_receiver, &exit);
-
         let ip_echo_server = solana_netutil::ip_echo_server(node.sockets.ip_echo.unwrap());
 
         let gossip_service = GossipService::new(
@@ -324,7 +318,7 @@ impl Validator {
             &exit,
             completed_slots_receiver,
             fork_confidence_cache,
-            tower_sender,
+            ledger_path,
         );
 
         if config.dev_sigverify_disabled {
@@ -356,7 +350,6 @@ impl Validator {
             poh_recorder,
             ip_echo_server,
             validator_exit,
-            tower_snapshot_service,
         }
     }
 
@@ -574,7 +567,6 @@ impl Service for Validator {
         }
 
         self.gossip_service.join()?;
-        self.tower_snapshot_service.join()?;
         self.tpu.join()?;
         self.tvu.join()?;
         self.ip_echo_server.shutdown_now();

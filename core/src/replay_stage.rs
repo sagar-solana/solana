@@ -10,6 +10,7 @@ use crate::poh_recorder::PohRecorder;
 use crate::result::{Error, Result};
 use crate::rpc_subscriptions::RpcSubscriptions;
 use crate::service::Service;
+use crate::snapshot_package::SnapshotPackageSender;
 use crate::tower_snapshot_service::TowerSender;
 use solana_ledger::bank_forks::BankForks;
 use solana_ledger::blocktree::{Blocktree, BlocktreeError};
@@ -26,6 +27,10 @@ use solana_sdk::transaction::Transaction;
 use solana_vote_api::vote_instruction;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fs;
+use std::fs::File;
+use std::io::Write;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, RwLock};
@@ -33,6 +38,7 @@ use std::thread::{self, Builder, JoinHandle};
 use std::time::Duration;
 use std::time::Instant;
 
+static TOWER_SNAPSHOT_NAME: &'static str = "tower";
 pub const MAX_ENTRY_RECV_PER_ITER: usize = 512;
 
 // Implement a destructor for the ReplayStage thread to signal it exited
@@ -151,7 +157,7 @@ impl ReplayStage {
         slot_full_senders: Vec<Sender<(u64, Pubkey)>>,
         snapshot_package_sender: Option<SnapshotPackageSender>,
         fork_confidence_cache: Arc<RwLock<ForkConfidenceCache>>,
-        tower_sender: TowerSender,
+        tower_snapshot_path: PathBuf,
     ) -> (Self, Receiver<Vec<Arc<Bank>>>)
     where
         T: 'static + KeypairUtil + Send + Sync,
@@ -238,7 +244,7 @@ impl ReplayStage {
                             total_staked,
                             &lockouts_sender,
                             &snapshot_package_sender,
-                            &tower_sender,
+                            &tower_snapshot_path.to_path_buf(),
                         )?;
 
                         Self::reset_poh_recorder(
@@ -476,7 +482,7 @@ impl ReplayStage {
         total_staked: u64,
         lockouts_sender: &Sender<ConfidenceAggregationData>,
         snapshot_package_sender: &Option<SnapshotPackageSender>,
-        tower_sender: &Sender<Tower>,
+        tower_snapshot_path: &PathBuf,
     ) -> Result<()>
     where
         T: 'static + KeypairUtil + Send + Sync,
@@ -529,11 +535,23 @@ impl ReplayStage {
             vote_tx.partial_sign(&[node_keypair.as_ref()], blockhash);
             vote_tx.partial_sign(&[voting_keypair.as_ref()], blockhash);
             // before publishing the latest vote on the network, send the tower to the tower snapshot service
-            if let Err(e) = tower_sender.send(tower.clone()) {
+
+            if let Err(e) = Self::snapshot_tower(&tower_snapshot_path, &tower) {
                 error!("Unable to backup tower, {:?}", e);
             }
             cluster_info.write().unwrap().push_vote(vote_tx);
         }
+        Ok(())
+    }
+
+    fn snapshot_tower(tower_snapshot_path: &PathBuf, tower: &Tower) -> Result<()> {
+        let timer = Instant::now();
+        fs::create_dir_all(tower_snapshot_path)?;
+        let mut snapshot_file = File::create(tower_snapshot_path.join(TOWER_SNAPSHOT_NAME))?;
+        snapshot_file.write_all(&bincode::serialize(&tower).expect("tower serialize failed"))?;
+        snapshot_file.flush()?;
+        let snapshot_time = timer.elapsed().as_millis() as usize;
+        inc_new_counter_info!("replay_stage-tower_snapshot_duration_ms", snapshot_time);
         Ok(())
     }
 
