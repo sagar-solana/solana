@@ -24,7 +24,6 @@ use crate::service::Service;
 use crate::shred_fetch_stage::ShredFetchStage;
 use crate::snapshot_packager_service::SnapshotPackagerService;
 use crate::storage_stage::{StorageStage, StorageState};
-use crate::tower_snapshot_service::TowerSender;
 use solana_ledger::bank_forks::BankForks;
 use solana_ledger::blocktree::{Blocktree, CompletedSlotsReceiver};
 use solana_ledger::leader_schedule_cache::LeaderScheduleCache;

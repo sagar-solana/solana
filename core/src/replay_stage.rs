@@ -10,13 +10,12 @@ use crate::poh_recorder::PohRecorder;
 use crate::result::{Error, Result};
 use crate::rpc_subscriptions::RpcSubscriptions;
 use crate::service::Service;
-use crate::snapshot_package::SnapshotPackageSender;
-use crate::tower_snapshot_service::TowerSender;
 use solana_ledger::bank_forks::BankForks;
 use solana_ledger::blocktree::{Blocktree, BlocktreeError};
 use solana_ledger::blocktree_processor;
 use solana_ledger::entry::{Entry, EntrySlice};
 use solana_ledger::leader_schedule_cache::LeaderScheduleCache;
+use solana_ledger::snapshot_package::SnapshotPackageSender;
 use solana_metrics::{datapoint_warn, inc_new_counter_info};
 use solana_runtime::bank::Bank;
 use solana_sdk::hash::Hash;
@@ -562,21 +561,36 @@ impl ReplayStage {
         bank_forks: &Arc<RwLock<BankForks>>,
     ) -> Tower {
         // try to reload tower from disk, otherwise reconstruct one
-        File::open(tower_snapshot_path.join(TOWER_SNAPSHOT_NAME))
-            .and_then(|tower_file| {
+        let tower =
+            File::open(tower_snapshot_path.join(TOWER_SNAPSHOT_NAME)).and_then(|tower_file| {
                 let mut stream = BufReader::new(tower_file);
                 let tower: bincode::Result<Tower> = bincode::deserialize_from(&mut stream);
                 tower.map_err(|err| io::Error::new(io::ErrorKind::Other, format!("{:?}", err)))
-            })
-            .unwrap_or_else(|err| {
-                if err.kind() != std::io::ErrorKind::NotFound {
+            });
+        // check that the tower actually belongs to this node
+        match tower {
+            Ok(tower) => {
+                if &tower.node_pubkey != my_pubkey {
                     error!(
-                        "Error: {:?} Unable to restore tower, generating a new from from bank forks",
-                        err
+                        "Wrong tower state found. My pubkey {:?} but found tower for {:?}",
+                        my_pubkey, tower.node_pubkey
                     );
+                    Tower::new(&my_pubkey, &vote_account, &bank_forks.read().unwrap())
+                } else {
+                    info!("Restoring tower from saved state..");
+                    tower
+                }
+            }
+            Err(e) => {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    error!(
+                            "Error: {:?} Unable to restore tower, generating a new one from from bank forks",
+                            e
+                        );
                 }
                 Tower::new(&my_pubkey, &vote_account, &bank_forks.read().unwrap())
-            })
+            }
+        }
     }
 
     fn update_confidence_cache(
