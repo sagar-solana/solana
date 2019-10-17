@@ -27,9 +27,8 @@ use solana_sdk::transaction::Transaction;
 use solana_vote_api::vote_instruction;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::fs;
 use std::fs::File;
-use std::io::Write;
+use std::io::{BufReader, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
@@ -37,6 +36,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread::{self, Builder, JoinHandle};
 use std::time::Duration;
 use std::time::Instant;
+use std::{fs, io};
 
 static TOWER_SNAPSHOT_NAME: &'static str = "tower";
 pub const MAX_ENTRY_RECV_PER_ITER: usize = 512;
@@ -169,7 +169,8 @@ impl ReplayStage {
         let bank_forks = bank_forks.clone();
         let poh_recorder = poh_recorder.clone();
         let my_pubkey = *my_pubkey;
-        let mut tower = Tower::new(&my_pubkey, &vote_account, &bank_forks.read().unwrap());
+        let mut tower =
+            Self::reload_tower(&my_pubkey, &tower_snapshot_path, &vote_account, &bank_forks);
         // Start the replay stage loop
         let leader_schedule_cache = leader_schedule_cache.clone();
         let vote_account = *vote_account;
@@ -535,7 +536,6 @@ impl ReplayStage {
             vote_tx.partial_sign(&[node_keypair.as_ref()], blockhash);
             vote_tx.partial_sign(&[voting_keypair.as_ref()], blockhash);
             // before publishing the latest vote on the network, send the tower to the tower snapshot service
-
             if let Err(e) = Self::snapshot_tower(&tower_snapshot_path, &tower) {
                 error!("Unable to backup tower, {:?}", e);
             }
@@ -553,6 +553,30 @@ impl ReplayStage {
         let snapshot_time = timer.elapsed().as_millis() as usize;
         inc_new_counter_info!("replay_stage-tower_snapshot_duration_ms", snapshot_time);
         Ok(())
+    }
+
+    fn reload_tower(
+        my_pubkey: &Pubkey,
+        tower_snapshot_path: &PathBuf,
+        vote_account: &Pubkey,
+        bank_forks: &Arc<RwLock<BankForks>>,
+    ) -> Tower {
+        // try to reload tower from disk, otherwise reconstruct one
+        File::open(tower_snapshot_path.join(TOWER_SNAPSHOT_NAME))
+            .and_then(|tower_file| {
+                let mut stream = BufReader::new(tower_file);
+                let tower: bincode::Result<Tower> = bincode::deserialize_from(&mut stream);
+                tower.map_err(|err| io::Error::new(io::ErrorKind::Other, format!("{:?}", err)))
+            })
+            .unwrap_or_else(|err| {
+                if err.kind() != std::io::ErrorKind::NotFound {
+                    error!(
+                        "Error: {:?} Unable to restore tower, generating a new from from bank forks",
+                        err
+                    );
+                }
+                Tower::new(&my_pubkey, &vote_account, &bank_forks.read().unwrap())
+            })
     }
 
     fn update_confidence_cache(
