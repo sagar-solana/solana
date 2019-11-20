@@ -89,6 +89,7 @@ fn main() -> Result<()> {
             &exit,
             s_reader,
             recycler.clone(),
+            false,
             "bench-streamer-test",
         ));
     }

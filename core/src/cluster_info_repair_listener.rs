@@ -576,6 +576,7 @@ mod tests {
                 &repairee_exit,
                 repairee_sender,
                 Recycler::default(),
+                true,
                 "mock_repairee_receiver",
             );
 

@@ -47,6 +47,7 @@ impl ShredFetchStage {
                     &exit,
                     packet_sender.clone(),
                     recycler.clone(),
+                    true,
                     "packet_modifier",
                 )
             })
@@ -74,6 +75,7 @@ impl ShredFetchStage {
                 &exit,
                 sender.clone(),
                 recycler.clone(),
+                true,
                 "shred_fetch_stage",
             )
         });

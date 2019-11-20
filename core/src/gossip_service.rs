@@ -41,6 +41,7 @@ impl GossipService {
             &exit,
             request_sender,
             Recycler::default(),
+            false,
             "gossip_receiver",
         );
         let (response_sender, response_receiver) = channel();

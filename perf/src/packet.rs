@@ -62,9 +62,16 @@ impl Packets {
         }
     }
 
-    pub fn new_with_recycler(recycler: PacketsRecycler, size: usize, name: &'static str) -> Self {
+    pub fn new_with_recycler(
+        recycler: PacketsRecycler,
+        size: usize,
+        enable_pinning: bool,
+        name: &'static str,
+    ) -> Self {
         let mut packets = recycler.allocate(name);
-        packets.reserve_and_pin(size);
+        if enable_pinning {
+            packets.reserve_and_pin(size);
+        }
         Packets {
             packets,
             recycler: Some(recycler),

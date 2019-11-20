@@ -100,6 +100,7 @@ impl FetchStage {
                 &exit,
                 sender.clone(),
                 recycler.clone(),
+                true,
                 "fetch_stage",
             )
         });
@@ -111,6 +112,7 @@ impl FetchStage {
                 &exit,
                 forward_sender.clone(),
                 recycler.clone(),
+                true,
                 "fetch_forward_stage",
             )
         });

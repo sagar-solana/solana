@@ -20,6 +20,7 @@ fn recv_loop(
     exit: Arc<AtomicBool>,
     channel: &PacketSender,
     recycler: &PacketsRecycler,
+    enable_pinning: bool,
     name: &'static str,
 ) -> Result<()> {
     let mut recv_count = 0;
@@ -27,7 +28,8 @@ fn recv_loop(
     let mut now = Instant::now();
     let mut num_max_received = 0; // Number of times maximum packets were received
     loop {
-        let mut msgs = Packets::new_with_recycler(recycler.clone(), PACKETS_PER_BATCH, name);
+        let mut msgs =
+            Packets::new_with_recycler(recycler.clone(), PACKETS_PER_BATCH, enable_pinning, name);
         loop {
             // Check for exit signal, even if socket is busy
             // (for instance the leader transaction socket)
@@ -65,6 +67,7 @@ pub fn receiver(
     exit: &Arc<AtomicBool>,
     packet_sender: PacketSender,
     recycler: PacketsRecycler,
+    enable_pinning: bool,
     name: &'static str,
 ) -> JoinHandle<()> {
     let res = sock.set_read_timeout(Some(Duration::new(1, 0)));
@@ -75,7 +78,14 @@ pub fn receiver(
     Builder::new()
         .name("solana-receiver".to_string())
         .spawn(move || {
-            let _ = recv_loop(&sock, exit, &packet_sender, &recycler.clone(), name);
+            let _ = recv_loop(
+                &sock,
+                exit,
+                &packet_sender,
+                &recycler.clone(),
+                enable_pinning,
+                name,
+            );
         })
         .unwrap()
 }
@@ -166,7 +176,14 @@ mod test {
         let send = UdpSocket::bind("127.0.0.1:0").expect("bind");
         let exit = Arc::new(AtomicBool::new(false));
         let (s_reader, r_reader) = channel();
-        let t_receiver = receiver(Arc::new(read), &exit, s_reader, Recycler::default(), "test");
+        let t_receiver = receiver(
+            Arc::new(read),
+            &exit,
+            s_reader,
+            Recycler::default(),
+            true,
+            "test",
+        );
         let t_responder = {
             let (s_responder, r_responder) = channel();
             let t_responder = responder("streamer_send_test", Arc::new(send), r_responder);

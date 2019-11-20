@@ -143,7 +143,14 @@ fn create_request_processor(
     let (s_responder, r_responder) = channel();
     let storage_socket = Arc::new(socket);
     let recycler = Recycler::default();
-    let t_receiver = receiver(storage_socket.clone(), exit, s_reader, recycler, "archiver");
+    let t_receiver = receiver(
+        storage_socket.clone(),
+        exit,
+        s_reader,
+        recycler,
+        false,
+        "archiver",
+    );
     thread_handles.push(t_receiver);
 
     let t_responder = responder("archiver-responder", storage_socket.clone(), r_responder);
@@ -865,6 +872,7 @@ impl Archiver {
             &exit,
             s_reader.clone(),
             Recycler::default(),
+            false,
             "archiver_reeciver",
         );
         let id = cluster_info.read().unwrap().id();
