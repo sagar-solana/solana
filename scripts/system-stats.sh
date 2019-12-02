@@ -16,9 +16,7 @@ while true; do
   # collect the total cpu usage by subtracting idle usage from 100%
   cpu_usage=$(echo "${top_ouput}" | grep '%Cpu(s):' | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | tail -1 | awk '{print 100 - $1}')
   # collect the total ram usage by dividing used memory / total memory
-  ram_total_and_usage=$(echo "${top_ouput}" | grep '.*B Mem'| tail -1 | sed "s/.*: *\([0-9.]*\)%* total.*, *\([0-9.]*\)%* used.*/\1 \2/")
-  read -r total used <<< "$ram_total_and_usage"
-  ram_usage=$(awk "BEGIN {print $used / $total * 100}")
+  ram_usage=$(free -t | awk 'NR == 2 {print $3/$2*100}')
   cpu_report="cpu_usage=$cpu_usage,ram_usage=$ram_usage"
 
   # if nvidia-smi exists, report gpu stats
