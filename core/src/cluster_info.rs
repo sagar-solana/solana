@@ -1463,11 +1463,11 @@ impl ClusterInfo {
                 HashMap::new()
             }
         };
-        let response_sender = response_sender.clone();
+        let response_sender_ = response_sender.clone();
         thread_pool.install(|| {
             requests
                 .into_par_iter()
-                .for_each_with(response_sender.clone(), |s, reqs| {
+                .for_each_with(response_sender_, |s, reqs| {
                     Self::handle_packets(obj, &recycler, &stakes, reqs, s, epoch_ms)
                 });
         });
