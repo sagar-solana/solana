@@ -12,6 +12,7 @@
 //! * layer 2 - Everyone else, if layer 1 is `2^10`, layer 2 should be able to fit `2^20` number of nodes.
 //!
 //! Bank needs to provide an interface for us to query the stake weight
+use crate::crds_value::MAX_VOTES;
 use crate::packet::limited_deserialize;
 use crate::streamer::{PacketReceiver, PacketSender};
 use crate::{
@@ -29,6 +30,9 @@ use bincode::{serialize, serialized_size};
 use compression::prelude::*;
 use core::cmp;
 use itertools::Itertools;
+use rayon::iter::IntoParallelIterator;
+use rayon::iter::ParallelIterator;
+use rayon::ThreadPool;
 use solana_ledger::{bank_forks::BankForks, staking_utils};
 use solana_measure::thread_mem_usage;
 use solana_metrics::{datapoint_debug, inc_new_counter_debug, inc_new_counter_error};
@@ -37,6 +41,7 @@ use solana_net_utils::{
     multi_bind_in_range, PortRange,
 };
 use solana_perf::packet::{to_packets_with_destination, Packets, PacketsRecycler};
+use solana_rayon_threadlimit::get_thread_count;
 use solana_sdk::{
     clock::{Slot, DEFAULT_MS_PER_SLOT},
     pubkey::Pubkey,
@@ -1429,10 +1434,20 @@ impl ClusterInfo {
         bank_forks: Option<&Arc<RwLock<BankForks>>>,
         requests_receiver: &PacketReceiver,
         response_sender: &PacketSender,
+        thread_pool: &ThreadPool,
     ) -> Result<()> {
         //TODO cache connections
         let timeout = Duration::new(1, 0);
-        let reqs = requests_receiver.recv_timeout(timeout)?;
+        let mut num = 0;
+        let num_peers = obj.read().unwrap().gossip_peers().len();
+        let mut requests = vec![requests_receiver.recv_timeout(timeout)?];
+        while let Ok(more_reqs) = requests_receiver.try_recv() {
+            num += requests.last().unwrap().packets.len();
+            //            if num >= (512 * 3 * 2 /*repairs/s*/ * num_peers.max(10) * 5/*num gossip/s*/) {
+            //                continue;
+            //            }
+            requests.push(more_reqs)
+        }
         let epoch_ms;
         let stakes: HashMap<_, _> = match bank_forks {
             Some(ref bank_forks) => {
@@ -1448,8 +1463,15 @@ impl ClusterInfo {
                 HashMap::new()
             }
         };
+        let response_sender = response_sender.clone();
+        thread_pool.install(|| {
+            requests
+                .into_par_iter()
+                .for_each_with(response_sender.clone(), |s, reqs| {
+                    Self::handle_packets(obj, &recycler, &stakes, reqs, s, epoch_ms)
+                });
+        });
 
-        Self::handle_packets(obj, &recycler, &stakes, reqs, response_sender, epoch_ms);
         Ok(())
     }
     pub fn listen(
@@ -1463,26 +1485,33 @@ impl ClusterInfo {
         let recycler = PacketsRecycler::default();
         Builder::new()
             .name("solana-listen".to_string())
-            .spawn(move || loop {
-                let e = Self::run_listen(
-                    &me,
-                    &recycler,
-                    bank_forks.as_ref(),
-                    &requests_receiver,
-                    &response_sender,
-                );
-                if exit.load(Ordering::Relaxed) {
-                    return;
-                }
-                if e.is_err() {
-                    let me = me.read().unwrap();
-                    debug!(
-                        "{}: run_listen timeout, table size: {}",
-                        me.gossip.id,
-                        me.gossip.crds.table.len()
+            .spawn(move || {
+                let thread_pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(get_thread_count())
+                    .build()
+                    .unwrap();
+                loop {
+                    let e = Self::run_listen(
+                        &me,
+                        &recycler,
+                        bank_forks.as_ref(),
+                        &requests_receiver,
+                        &response_sender,
+                        &thread_pool,
                     );
+                    if exit.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    if e.is_err() {
+                        let me = me.read().unwrap();
+                        debug!(
+                            "{}: run_listen timeout, table size: {}",
+                            me.gossip.id,
+                            me.gossip.crds.table.len()
+                        );
+                    }
+                    thread_mem_usage::datapoint("solana-listen");
                 }
-                thread_mem_usage::datapoint("solana-listen");
             })
             .unwrap()
     }
